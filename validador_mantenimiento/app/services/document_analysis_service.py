@@ -7,11 +7,16 @@ from sqlalchemy.orm import Session
 
 from app.models.document_analysis import DocumentAnalysis
 from app.models.service_event import ServiceEvent
+from app.models.validation import Validation
 from app.schemas.document_analysis_schema import DocumentAnalysisRead
 from app.schemas.service_event_schema import ServiceEventRead
 from app.services.document_parser import ParsedDocument, parse_document
 from app.services.document_service import get_document_or_raise
 from app.services.extraction_service import HybridExtractor
+
+
+class DocumentAnalysisReprocessConflict(Exception):
+    """No se reemplaza una extracción que ya fue confirmada por una persona."""
 
 
 def _field_payload(value: Any, method: str, document_id: int) -> dict[str, Any]:
@@ -52,6 +57,7 @@ def _create_event(
         "repair_order_number": _field_payload(parsed_event.repair_order_number, method, document_id),
         "dealer": _field_payload(parsed_event.dealer, method, document_id),
         "vehicle": document_fields,
+        "works": parsed_event.work_evidence,
     }
     return ServiceEvent(
         document_id=document_id,
@@ -75,15 +81,40 @@ def _create_event(
     )
 
 
-def analyze_document(db: Session, document_id: int) -> DocumentAnalysisRead:
-    """Extrae y persiste una sola vez; el archivo original nunca se modifica."""
+def _discard_automatic_analysis(db: Session, document_id: int, analysis: DocumentAnalysis | None) -> None:
+    """Elimina sólo resultados automáticos reemplazables del documento indicado."""
+    confirmed_event = db.scalar(
+        select(ServiceEvent.id).where(
+            ServiceEvent.document_id == document_id,
+            ServiceEvent.user_confirmed.is_(True),
+        )
+    )
+    if confirmed_event is not None:
+        raise DocumentAnalysisReprocessConflict(
+            "El documento tiene un evento confirmado por una persona; no se puede reemplazar automáticamente."
+        )
+
+    # Las validaciones de estos eventos automáticos contienen resultados ya obsoletos.
+    for validation in db.scalars(select(Validation).where(Validation.document_id == document_id)):
+        db.delete(validation)
+    for event in db.scalars(select(ServiceEvent).where(ServiceEvent.document_id == document_id)):
+        db.delete(event)
+    if analysis:
+        db.delete(analysis)
+    db.flush()
+
+
+def analyze_document(db: Session, document_id: int, *, force: bool = False) -> DocumentAnalysisRead:
+    """Extrae el archivo original; `force` sólo reemplaza resultados automáticos no confirmados."""
     document = get_document_or_raise(db, document_id)
     existing = db.scalar(select(DocumentAnalysis).where(DocumentAnalysis.document_id == document.id))
     if existing:
-        events = list(
-            db.scalars(select(ServiceEvent).where(ServiceEvent.document_id == document.id).order_by(ServiceEvent.id))
-        )
-        return _analysis_read(existing, events)
+        if not force:
+            events = list(
+                db.scalars(select(ServiceEvent).where(ServiceEvent.document_id == document.id).order_by(ServiceEvent.id))
+            )
+            return _analysis_read(existing, events)
+        _discard_automatic_analysis(db, document.id, existing)
 
     extraction = HybridExtractor().extract(document.file_path, document.mime_type)
     parsed: ParsedDocument = parse_document(extraction)
@@ -91,6 +122,11 @@ def analyze_document(db: Session, document_id: int) -> DocumentAnalysisRead:
         name: _field_payload(value, extraction.method, document.id)
         for name, value in parsed.fields.items()
     }
+    document_fields["document_generated_at"] = _field_payload(
+        parsed.document_generated_at, extraction.method, document.id
+    )
+    if parsed.layout_debug:
+        document_fields["layout_debug"] = parsed.layout_debug
     analysis = DocumentAnalysis(
         document_id=document.id,
         extraction_method=extraction.method,

@@ -54,7 +54,7 @@ Para un PDF escaneado o una imagen, `HybridExtractor` deja el documento listo pa
 
 - `POST`, `GET` `/api/vehicles`; `GET`, `PUT`, `DELETE` `/api/vehicles/{id}` (DELETE es baja lógica).
 - `POST`, `GET` `/api/vehicles/{id}/maintenances`.
-- `POST /api/documents/upload`, `GET /api/documents/{id}`, `POST /api/documents/{id}/analyze` y `GET /api/documents/{id}/analysis`.
+- `POST /api/documents/upload`, `GET /api/documents/{id}`, `POST /api/documents/{id}/analyze` y `GET /api/documents/{id}/analysis`. Para corregir una extracción automática no confirmada: `POST /api/documents/{id}/analyze?force=true`.
 - `GET`, `PUT` `/api/service-events/{id}` y `POST /api/service-events/{id}/validate`.
 - `POST`, `GET` `/api/validations`; `GET /api/validations/{id}` y `GET /api/validations/{id}/audit`.
 - `GET /api/dashboard`.
@@ -71,4 +71,4 @@ Las pruebas cubren los casos de la versión manual, extracción directa de PDF, 
 
 ## Preparación para Fase 2
 
-`VisionExtractor` y `OcrExtractor` son contratos desacoplados, preparados para documentos escaneados, fotos y manuscritos. Quedan pendientes el proveedor visual, preprocesamiento no destructivo, múltiples eventos complejos por página, deduplicación/fusión avanzada y revisión humana enriquecida.
+`VisionExtractor` y `OcrExtractor` son contratos desacoplados, preparados para documentos escaneados, fotos y manuscritos. Los historiales digitales se interpretan con palabras y coordenadas: cabecera de tabla → columnas → filas → eventos; la fecha de generación queda separada de las fechas de servicio. Quedan pendientes el proveedor visual, preprocesamiento no destructivo, deduplicación/fusión avanzada y revisión humana enriquecida.

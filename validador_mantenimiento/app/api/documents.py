@@ -1,10 +1,14 @@
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
 from sqlalchemy.orm import Session
 
 from app.database.database import get_db
 from app.schemas.document_analysis_schema import DocumentAnalysisRead
 from app.schemas.document_schema import DocumentRead
-from app.services.document_analysis_service import analyze_document, get_document_analysis
+from app.services.document_analysis_service import (
+    DocumentAnalysisReprocessConflict,
+    analyze_document,
+    get_document_analysis,
+)
 from app.services.document_service import (
     DocumentNotFoundError,
     InvalidDocumentError,
@@ -47,11 +51,17 @@ def get_one(document_id: int, db: Session = Depends(get_db)) -> DocumentRead:
 
 
 @router.post("/{document_id}/analyze", response_model=DocumentAnalysisRead)
-def analyze(document_id: int, db: Session = Depends(get_db)) -> DocumentAnalysisRead:
+def analyze(
+    document_id: int,
+    force: bool = Query(False, description="Reprocesa sólo resultados automáticos no confirmados."),
+    db: Session = Depends(get_db),
+) -> DocumentAnalysisRead:
     try:
-        return analyze_document(db, document_id)
+        return analyze_document(db, document_id, force=force)
     except DocumentNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except DocumentAnalysisReprocessConflict as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
 
 
 @router.get("/{document_id}/analysis", response_model=DocumentAnalysisRead)

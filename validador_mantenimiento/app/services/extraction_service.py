@@ -12,9 +12,22 @@ class ExtractedPage:
 
 
 @dataclass(frozen=True)
+class LayoutWord:
+    """Palabra de un PDF digital y su posición en la página."""
+
+    text: str
+    page_number: int
+    x0: float
+    x1: float
+    top: float
+    bottom: float
+
+
+@dataclass(frozen=True)
 class ExtractionResult:
     method: str
     pages: list[ExtractedPage] = field(default_factory=list)
+    words: list[LayoutWord] = field(default_factory=list)
     has_usable_text: bool = False
     warnings: list[str] = field(default_factory=list)
 
@@ -54,7 +67,38 @@ class PdfTextExtractor:
                 pages=pages,
                 warnings=["El PDF no contiene una capa de texto útil; se requiere extractor visual."],
             )
-        return ExtractionResult(method="pdf_text", pages=pages, has_usable_text=True)
+        words, layout_warnings = self._extract_layout_words(file_path)
+        return ExtractionResult(
+            method="pdf_text",
+            pages=pages,
+            words=words,
+            has_usable_text=True,
+            warnings=layout_warnings,
+        )
+
+    @staticmethod
+    def _extract_layout_words(file_path: str) -> tuple[list[LayoutWord], list[str]]:
+        """Obtiene palabras/posición para distinguir tablas de texto corrido."""
+        try:
+            import pdfplumber
+
+            words: list[LayoutWord] = []
+            with pdfplumber.open(file_path) as pdf:
+                for page_number, page in enumerate(pdf.pages, start=1):
+                    for word in page.extract_words(x_tolerance=1, y_tolerance=2, keep_blank_chars=False):
+                        words.append(
+                            LayoutWord(
+                                text=word["text"],
+                                page_number=page_number,
+                                x0=float(word["x0"]),
+                                x1=float(word["x1"]),
+                                top=float(word["top"]),
+                                bottom=float(word["bottom"]),
+                            )
+                        )
+            return words, []
+        except Exception as exc:
+            return [], [f"No fue posible recuperar el layout del PDF: {exc}"]
 
 
 class VisionExtractor:

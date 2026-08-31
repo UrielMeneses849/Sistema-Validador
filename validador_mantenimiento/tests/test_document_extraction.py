@@ -4,7 +4,7 @@ from fastapi.testclient import TestClient
 
 from app.services.document_parser import parse_document
 from app.services.extraction_service import HybridExtractor
-from tests.pdf_fixture import REFERENCE_TEXT, text_pdf
+from tests.pdf_fixture import REFERENCE_12000_TEXT, REFERENCE_TEXT, text_pdf
 
 
 def create_vehicle(client: TestClient, number: str = "VEH-AUTO-01") -> int:
@@ -44,6 +44,19 @@ def test_pdf_text_extractor_and_parser_use_digital_text(tmp_path):
     assert parsed.service_events[0].resets_maintenance_interval is True
 
 
+def test_individual_service_uses_labeled_odometer_not_commercial_interval(tmp_path):
+    path = tmp_path / "service-12000.pdf"
+    text_pdf(path, REFERENCE_12000_TEXT)
+
+    parsed = parse_document(HybridExtractor().extract(str(path), "application/pdf"))
+    event = parsed.service_events[0]
+
+    assert event.service_date.normalized_value.isoformat() == "2024-07-01"
+    assert event.mileage.normalized_value == 12047
+    assert event.mileage.normalized_value != 12000
+    assert event.resets_maintenance_interval is True
+
+
 def test_document_api_analyzes_then_marks_first_maintenance_available(client: TestClient, tmp_path):
     vehicle_id = create_vehicle(client)
     pdf = text_pdf(tmp_path / "servicio.pdf", REFERENCE_TEXT)
@@ -65,6 +78,34 @@ def test_document_api_analyzes_then_marks_first_maintenance_available(client: Te
     assert validation.status_code == 200, validation.text
     assert validation.json()["status"] == "FIRST_MAINTENANCE_AVAILABLE"
     assert validation.json()["analysis_details"]["interval_validation"] == "not_applicable"
+
+
+def test_force_reanalysis_replaces_only_unconfirmed_automatic_results(client: TestClient, tmp_path):
+    vehicle_id = create_vehicle(client, "VEH-REPROCESS-01")
+    pdf = text_pdf(tmp_path / "servicio.pdf", REFERENCE_TEXT)
+    uploaded = client.post(
+        "/api/documents/upload",
+        data={"vehicle_id": str(vehicle_id)},
+        files={"file": ("servicio.pdf", pdf, "application/pdf")},
+    )
+    document_id = uploaded.json()["id"]
+    first = client.post(f"/api/documents/{document_id}/analyze")
+    assert first.status_code == 200
+    first_event = first.json()["service_events"][0]
+
+    # Una validación automática anterior se invalida al reanalizar el mismo original.
+    assert client.post(f"/api/service-events/{first_event['id']}/validate").status_code == 200
+    refreshed = client.post(f"/api/documents/{document_id}/analyze?force=true")
+    assert refreshed.status_code == 200, refreshed.text
+    refreshed_event = refreshed.json()["service_events"][0]
+    assert refreshed_event["mileage_km"] == 6399
+    assert refreshed_event["user_confirmed"] is False
+
+    # Una corrección humana sí queda protegida contra un reemplazo automático.
+    assert client.put(f"/api/service-events/{refreshed_event['id']}", json={"mileage_km": 6400}).status_code == 200
+    blocked = client.post(f"/api/documents/{document_id}/analyze?force=true")
+    assert blocked.status_code == 409
+    assert "confirmado" in blocked.json()["detail"]
 
 
 def test_manual_fallback_uses_the_same_first_maintenance_rule(client: TestClient):

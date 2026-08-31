@@ -37,10 +37,37 @@ function evidenceValue(fields, name) {
   return fields?.[name]?.normalized_value ?? "—"
 }
 
+function worksForEvent(event) {
+  const works = event?.field_evidence?.works || []
+  const evidence = works.map((work) => work.raw_text).filter(Boolean)
+  return evidence.length ? evidence : event?.description ? [event.description] : ["—"]
+}
+
+function historyDebugMarkup(analysis) {
+  if (analysis.document_type !== "historial_servicio") return ""
+  const fields = analysis.extracted_fields || {}
+  const debug = fields.layout_debug || {}
+  const generatedAt = evidenceValue(fields, "document_generated_at")
+  const latest = debug.latest_preventive_maintenance
+  const rows = (analysis.service_events || []).map((event) => {
+    const reset = event.resets_maintenance_interval === true ? "Sí" : event.resets_maintenance_interval === false ? "No" : "Revisar"
+    return `<tr><td>${UI.date(event.service_date)}</td><td>${UI.km(event.mileage_km)}</td><td>${worksForEvent(event).map(UI.escape).join("<br>")}</td><td>${UI.escape(event.service_category.replaceAll("_", " "))}</td><td>${reset}</td></tr>`
+  }).join("")
+  const latestText = latest ? `${UI.date(latest.date)} · ${UI.km(latest.mileage_km)}` : "No identificado"
+  return `<section class="history-debug"><h3>Depuración de historial reconstruido</h3><p class="hint">Estrategia: tabla por columnas. Fecha de generación del reporte: <strong>${UI.date(generatedAt)}</strong>; no se usa como fecha de servicio.</p><div class="analysis-grid"><div><span>Filas/eventos detectados</span><strong>${debug.event_count ?? analysis.service_events?.length ?? 0}</strong></div><div><span>Columnas de tabla</span><strong>${debug.headers?.length ? "Fecha · Orden · Kms · Trabajo" : "No disponible"}</strong></div><div><span>Último preventivo</span><strong>${latestText}</strong></div></div><div class="table-wrap"><table class="data-table history-debug-table"><thead><tr><th>Fecha de servicio</th><th>Kms</th><th>Trabajos usados como evidencia</th><th>Clasificación</th><th>Reinicia intervalo</th></tr></thead><tbody>${rows || "<tr><td colspan=\"5\" class=\"empty\">No se reconstruyeron eventos.</td></tr>"}</tbody></table></div></section>`
+}
+
 function analysisMarkup(analysis, event) {
   const fields = analysis.extracted_fields || {}
   const confidence = analysis.confidence === "high" ? "Alta" : analysis.confidence === "medium" ? "Media" : "Baja"
-  return `<div class="analysis-heading"><div><p class="eyebrow">Documento analizado</p><h2>${UI.escape(analysis.document_type.replaceAll("_", " "))}</h2></div><span class="status status-${UI.escape(analysis.confidence)}">Confianza ${confidence}</span></div><div class="analysis-grid"><div><span>Vehículo</span><strong>${UI.escape(`${evidenceValue(fields, "brand")} ${evidenceValue(fields, "model")} ${evidenceValue(fields, "year")}`)}</strong></div><div><span>VIN</span><strong>${UI.escape(evidenceValue(fields, "vin"))}</strong></div><div><span>Placas</span><strong>${UI.escape(evidenceValue(fields, "plates"))}</strong></div><div><span>Fuente</span><strong>${analysis.extraction_method === "pdf_text" ? "PDF digital" : UI.escape(analysis.extraction_method)}</strong></div><div><span>Fecha detectada</span><strong>${UI.date(event?.service_date)}</strong></div><div><span>Kilometraje detectado</span><strong>${UI.km(event?.mileage_km)}</strong></div><div class="analysis-full"><span>Servicio detectado</span><strong>${UI.escape(event?.description || "No se detectó un evento de servicio")}</strong></div></div>${analysis.warnings?.length ? `<p class="hint">${analysis.warnings.map(UI.escape).join(" · ")}</p>` : ""}`
+  return `<div class="analysis-heading"><div><p class="eyebrow">Documento analizado</p><h2>${UI.escape(analysis.document_type.replaceAll("_", " "))}</h2></div><span class="status status-${UI.escape(analysis.confidence)}">Confianza ${confidence}</span></div><div class="analysis-grid"><div><span>Vehículo</span><strong>${UI.escape(`${evidenceValue(fields, "brand")} ${evidenceValue(fields, "model")} ${evidenceValue(fields, "year")}`)}</strong></div><div><span>VIN</span><strong>${UI.escape(evidenceValue(fields, "vin"))}</strong></div><div><span>Placas</span><strong>${UI.escape(evidenceValue(fields, "plates"))}</strong></div><div><span>Fuente</span><strong>${analysis.extraction_method === "pdf_text" ? "PDF digital" : UI.escape(analysis.extraction_method)}</strong></div><div><span>Fecha detectada</span><strong>${UI.date(event?.service_date)}</strong></div><div><span>Kilometraje detectado</span><strong>${UI.km(event?.mileage_km)}</strong></div><div class="analysis-full"><span>Servicio detectado</span><strong>${UI.escape(event?.description || "No se detectó un evento de servicio")}</strong></div></div>${historyDebugMarkup(analysis)}${analysis.warnings?.length ? `<p class="hint">${analysis.warnings.map(UI.escape).join(" · ")}</p>` : ""}`
+}
+
+function eventForValidation(analysis) {
+  const events = analysis.service_events || []
+  const preventive = events.filter((event) => event.resets_maintenance_interval === true && event.service_date && event.mileage_km !== null && !event.requires_human_review)
+  if (preventive.length) return [...preventive].sort((left, right) => `${left.service_date}-${left.mileage_km}`.localeCompare(`${right.service_date}-${right.mileage_km}`)).at(-1)
+  return events[0] || null
 }
 
 const validationForm = document.querySelector("#validation-form")
@@ -86,7 +113,8 @@ async function analyzeNewDocument(formData) {
   const uploaded = await API.upload(vehicleId, file)
   uploadedDocumentId = uploaded.id
   const analysis = await API.post(`/documents/${uploaded.id}/analyze`, {})
-  const event = analysis.service_events?.[0]
+  // El análisis ya persiste todos los eventos antes de validar el preventivo más reciente.
+  const event = eventForValidation(analysis)
   analysisSummary.classList.remove("hidden")
   analysisSummary.innerHTML = analysisMarkup(analysis, event)
   if (!event) {
