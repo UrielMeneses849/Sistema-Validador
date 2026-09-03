@@ -25,6 +25,7 @@ class MaintenanceReference:
 @dataclass(frozen=True)
 class TimelineAssessment:
     status: str
+    validation_state: str
     message: str
     reasons: list[str]
     previous: Optional[MaintenanceReference]
@@ -79,6 +80,7 @@ def assess_service_event(db: Session, event: ServiceEvent) -> TimelineAssessment
     if event.resets_maintenance_interval is not True:
         return TimelineAssessment(
             status="NOT_MAINTENANCE_EVENT",
+            validation_state="requires_review",
             message="El evento se conserva en el historial, pero no reinicia el intervalo de mantenimiento.",
             reasons=["No hay evidencia suficiente de mantenimiento preventivo/programado."],
             previous=None,
@@ -88,11 +90,30 @@ def assess_service_event(db: Session, event: ServiceEvent) -> TimelineAssessment
             meets_kilometer_condition=None,
             meets_time_condition=None,
         )
-    if event.requires_human_review or event.service_date is None or event.mileage_km is None:
+    if event.service_date is None or event.mileage_km is None:
+        missing = []
+        if event.service_date is None:
+            missing.append("Falta la fecha del servicio actual.")
+        if event.mileage_km is None:
+            missing.append("Falta el kilometraje del servicio actual.")
         return TimelineAssessment(
             status="INSUFFICIENT_DATA",
-            message="Faltan datos confiables para validar el intervalo; se requiere confirmación humana.",
-            reasons=event.warnings or ["Falta fecha o kilometraje de servicio."],
+            validation_state="missing_current_data",
+            message="Falta fecha o kilometraje del servicio actual.",
+            reasons=missing,
+            previous=None,
+            kilometer_limit=None,
+            date_limit=None,
+            delta_km=None,
+            meets_kilometer_condition=None,
+            meets_time_condition=None,
+        )
+    if event.requires_human_review:
+        return TimelineAssessment(
+            status="REQUIRES_REVIEW",
+            validation_state="requires_review",
+            message="Los datos actuales están completos, pero la extracción requiere revisión.",
+            reasons=event.warnings or ["La confianza o consistencia de los datos requiere confirmación humana."],
             previous=None,
             kilometer_limit=None,
             date_limit=None,
@@ -105,7 +126,8 @@ def assess_service_event(db: Session, event: ServiceEvent) -> TimelineAssessment
     if previous is None:
         return TimelineAssessment(
             status="FIRST_MAINTENANCE_AVAILABLE",
-            message="Primer mantenimiento disponible: no existe una evidencia anterior para evaluar el intervalo previo.",
+            validation_state="no_previous_maintenance",
+            message="Sin mantenimiento anterior: este es el primer registro disponible.",
             reasons=["El evento se registró como referencia para validar el siguiente mantenimiento."],
             previous=None,
             kilometer_limit=None,
@@ -117,6 +139,7 @@ def assess_service_event(db: Session, event: ServiceEvent) -> TimelineAssessment
     if event.mileage_km < previous.mileage_km:
         return TimelineAssessment(
             status="REQUIRES_REVIEW",
+            validation_state="requires_review",
             message="Se detectó kilometraje regresivo respecto al mantenimiento anterior; requiere revisión.",
             reasons=[
                 "possible_mileage_inconsistency",
@@ -154,6 +177,7 @@ def assess_service_event(db: Session, event: ServiceEvent) -> TimelineAssessment
         reasons = ["Se superó el límite de tiempo antes del siguiente mantenimiento."]
     return TimelineAssessment(
         status=status,
+        validation_state="compliant" if status == "COMPLIANT" else "non_compliant",
         message=message,
         reasons=reasons,
         previous=previous,

@@ -127,7 +127,7 @@ async function analyzeNewDocument(formData) {
 }
 
 if (validationForm) {
-  document.querySelector("#document-file").addEventListener("change", (event) => { document.querySelector("#file-name").textContent = event.target.files[0]?.name || "Selecciona un PDF, JPG, JPEG o PNG" })
+  document.querySelector("#document-file").addEventListener("change", (event) => { document.querySelector("#file-name").textContent = event.target.files[0]?.name || "Selecciona un PDF, JPG, JPEG, PNG o WEBP" })
   validationForm.addEventListener("submit", async (event) => {
     event.preventDefault()
     UI.clearNotice(validationNotice)

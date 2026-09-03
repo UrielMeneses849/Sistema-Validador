@@ -12,7 +12,7 @@ from app.schemas.document_analysis_schema import DocumentAnalysisRead
 from app.schemas.service_event_schema import ServiceEventRead
 from app.services.document_parser import ParsedDocument, parse_document
 from app.services.document_service import get_document_or_raise
-from app.services.extraction_service import HybridExtractor
+from app.services.extraction_service import DocumentExtractor, HybridExtractor
 
 
 class DocumentAnalysisReprocessConflict(Exception):
@@ -58,6 +58,8 @@ def _create_event(
         "dealer": _field_payload(parsed_event.dealer, method, document_id),
         "vehicle": document_fields,
         "works": parsed_event.work_evidence,
+        "combined_confidence": round(parsed_event.confidence_score, 4),
+        "manually_verified": False,
     }
     return ServiceEvent(
         document_id=document_id,
@@ -104,7 +106,13 @@ def _discard_automatic_analysis(db: Session, document_id: int, analysis: Documen
     db.flush()
 
 
-def analyze_document(db: Session, document_id: int, *, force: bool = False) -> DocumentAnalysisRead:
+def analyze_document(
+    db: Session,
+    document_id: int,
+    *,
+    force: bool = False,
+    extractor: DocumentExtractor | None = None,
+) -> DocumentAnalysisRead:
     """Extrae el archivo original; `force` sólo reemplaza resultados automáticos no confirmados."""
     document = get_document_or_raise(db, document_id)
     existing = db.scalar(select(DocumentAnalysis).where(DocumentAnalysis.document_id == document.id))
@@ -116,7 +124,7 @@ def analyze_document(db: Session, document_id: int, *, force: bool = False) -> D
             return _analysis_read(existing, events)
         _discard_automatic_analysis(db, document.id, existing)
 
-    extraction = HybridExtractor().extract(document.file_path, document.mime_type)
+    extraction = (extractor or HybridExtractor()).extract(document.file_path, document.mime_type)
     parsed: ParsedDocument = parse_document(extraction)
     document_fields = {
         name: _field_payload(value, extraction.method, document.id)
@@ -125,6 +133,10 @@ def analyze_document(db: Session, document_id: int, *, force: bool = False) -> D
     document_fields["document_generated_at"] = _field_payload(
         parsed.document_generated_at, extraction.method, document.id
     )
+    if extraction.metadata:
+        document_fields["extraction_metadata"] = extraction.metadata
+        if extraction.method == "ocr":
+            document_fields["ocr"] = extraction.metadata
     if parsed.layout_debug:
         document_fields["layout_debug"] = parsed.layout_debug
     analysis = DocumentAnalysis(

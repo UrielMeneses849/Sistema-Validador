@@ -7,10 +7,20 @@ from dataclasses import dataclass, field
 from datetime import date, datetime
 from typing import Any, Iterable, Optional
 
+from app.core.config import OCR_REVIEW_THRESHOLD
 from app.services.extraction_service import ExtractionResult, LayoutWord
 
 
-DATE_PATTERN = re.compile(r"\b(0?[1-9]|[12]\d|3[01])[/-](0?[1-9]|1[0-2])[/-]((?:19|20)?\d{2})\b")
+DATE_PATTERN = re.compile(r"\b(0?[1-9]|[12]\d|3[01])[\/\-.](0?[1-9]|1[0-2])[\/\-.]((?:19|20)?\d{2})\b")
+SPANISH_MONTHS = {
+    "ENERO": 1, "FEBRERO": 2, "MARZO": 3, "ABRIL": 4, "MAYO": 5, "JUNIO": 6,
+    "JULIO": 7, "AGOSTO": 8, "SEPTIEMBRE": 9, "SETIEMBRE": 9, "OCTUBRE": 10,
+    "NOVIEMBRE": 11, "DICIEMBRE": 12,
+}
+TEXTUAL_DATE_PATTERN = re.compile(
+    r"\b(0?[1-9]|[12]\d|3[01])(?:\s+DE\s+|\s+|[\/\-.])(" + "|".join(SPANISH_MONTHS) + r")(?:\s+DE\s+|\s+|[\/\-.])((?:19|20)?\d{2})\b",
+    re.IGNORECASE,
+)
 VIN_PATTERN = re.compile(r"\b[A-HJ-NPR-Z0-9]{17}\b", re.IGNORECASE)
 PLATE_PATTERN = re.compile(r"\b[A-Z]{3}\d{3}[A-Z]?\b", re.IGNORECASE)
 MILEAGE_PATTERN = re.compile(r"(?<![A-Z0-9])(?:\d{1,3}(?:[,\.\s]\d{3})+|\d{4,7})(?![A-Z0-9])")
@@ -25,6 +35,9 @@ class FieldValue:
     normalized_value: Any = None
     confidence: str = "low"
     source_page: Optional[int] = None
+    confidence_score: float = 0.0
+    candidates: list[dict[str, Any]] = field(default_factory=list)
+    ambiguous: bool = False
 
     def evidence(self, method: str) -> dict[str, Any]:
         normalized = self.normalized_value.isoformat() if isinstance(self.normalized_value, date) else self.normalized_value
@@ -34,6 +47,9 @@ class FieldValue:
             "source_page": self.source_page,
             "extraction_method": method,
             "confidence": self.confidence,
+            "confidence_score": round(self.confidence_score, 4),
+            "candidates": self.candidates,
+            "ambiguous": self.ambiguous,
         }
 
 
@@ -51,6 +67,7 @@ class ParsedServiceEvent:
     resets_maintenance_interval: Optional[bool]
     confidence: str
     requires_human_review: bool
+    confidence_score: float = 0.0
     warnings: list[str] = field(default_factory=list)
 
 
@@ -78,6 +95,32 @@ def _confidence(score: int, occurrences: int = 1) -> str:
     return "low"
 
 
+def _confidence_label(score: float) -> str:
+    if score >= OCR_REVIEW_THRESHOLD:
+        return "high"
+    if score >= 0.60:
+        return "medium"
+    return "low"
+
+
+def _token_confidence(words: list[LayoutWord], page_number: int, raw_value: str) -> float | None:
+    raw_tokens = {token for token in re.findall(r"[A-Z0-9]+", _comparison_text(raw_value)) if token}
+    matches = []
+    for word in words:
+        if word.page_number != page_number or word.confidence is None:
+            continue
+        word_tokens = set(re.findall(r"[A-Z0-9]+", _comparison_text(word.text)))
+        if raw_tokens & word_tokens:
+            matches.append(word.confidence)
+    return sum(matches) / len(matches) if matches else None
+
+
+def _combined_pattern_token_confidence(pattern_confidence: float, token_confidence: float | None) -> float:
+    if token_confidence is None:
+        return pattern_confidence
+    return round(pattern_confidence * 0.55 + token_confidence * 0.45, 4)
+
+
 def _iter_matches(pages: Iterable[tuple[int, str]], pattern: re.Pattern[str]):
     for page_number, page_text in pages:
         for match in pattern.finditer(page_text):
@@ -93,24 +136,68 @@ def _choose_by_frequency(matches: list[tuple[int, str]], normalizer) -> FieldVal
         return FieldValue()
     selected, occurrences = values.most_common(1)[0]
     page, raw, _ = next(item for item in normalized if item[2] == selected)
-    return FieldValue(raw_value=raw, normalized_value=selected, confidence=_confidence(occurrences * 2, occurrences), source_page=page)
+    confidence = _confidence(occurrences * 2, occurrences)
+    confidence_score = {"high": 0.94, "medium": 0.74, "low": 0.45}[confidence]
+    candidates = [
+        {"raw_value": item_raw, "normalized_value": item_value, "source_page": item_page}
+        for item_page, item_raw, item_value in normalized if item_value is not None
+    ]
+    return FieldValue(raw, selected, confidence, page, confidence_score, candidates, len(values) > 1)
 
 
 def _normalize_date(raw: str) -> Optional[date]:
     match = DATE_PATTERN.fullmatch(raw.strip())
-    if not match:
-        return None
-    day, month, year = match.groups()
-    normalized_year = int(year) + 2000 if len(year) == 2 else int(year)
+    if match:
+        day, month, year = match.groups()
+        month_number = int(month)
+    else:
+        textual_match = TEXTUAL_DATE_PATTERN.fullmatch(_comparison_text(raw.strip()))
+        if not textual_match:
+            return None
+        day, month_name, year = textual_match.groups()
+        month_number = SPANISH_MONTHS[month_name.upper()]
+    if len(year) == 2:
+        numeric_year = int(year)
+        normalized_year = 2000 + numeric_year if numeric_year <= 49 else 1900 + numeric_year
+        if normalized_year > date.today().year + 1 or normalized_year < 1950:
+            return None
+    else:
+        normalized_year = int(year)
     try:
-        return datetime(normalized_year, int(month), int(day)).date()
+        return datetime(normalized_year, month_number, int(day)).date()
     except ValueError:
         return None
 
 
-def extract_date(pages: list[tuple[int, str]]) -> FieldValue:
-    matches = [(page, match.group(0)) for page, _, match in _iter_matches(pages, DATE_PATTERN)]
-    return _choose_by_frequency(matches, _normalize_date)
+def extract_date(pages: list[tuple[int, str]], words: list[LayoutWord] | None = None) -> FieldValue:
+    candidates: list[dict[str, Any]] = []
+    for pattern, base_pattern_confidence in ((DATE_PATTERN, 0.96), (TEXTUAL_DATE_PATTERN, 0.93)):
+        for page, _, match in _iter_matches(pages, pattern):
+            raw = match.group(0)
+            normalized = _normalize_date(raw)
+            if normalized is None:
+                continue
+            pattern_confidence = base_pattern_confidence
+            if len(match.groups()[-1]) == 2:
+                pattern_confidence = min(pattern_confidence, 0.82)
+            score = _combined_pattern_token_confidence(
+                pattern_confidence, _token_confidence(words or [], page, raw)
+            )
+            candidates.append({
+                "raw_value": raw,
+                "normalized_value": normalized.isoformat(),
+                "source_page": page,
+                "confidence_score": score,
+            })
+    if not candidates:
+        return FieldValue()
+    candidates.sort(key=lambda item: item["confidence_score"], reverse=True)
+    selected = candidates[0]
+    distinct_values = {item["normalized_value"] for item in candidates}
+    competing = [item for item in candidates[1:] if item["normalized_value"] != selected["normalized_value"] and abs(item["confidence_score"] - selected["confidence_score"]) <= 0.05]
+    ambiguous = bool(competing)
+    score = min(selected["confidence_score"], 0.75) if ambiguous else selected["confidence_score"]
+    return FieldValue(selected["raw_value"], date.fromisoformat(selected["normalized_value"]), _confidence_label(score), selected["source_page"], score, candidates, ambiguous or len(distinct_values) > 1)
 
 
 def _normalize_mileage(raw: str) -> Optional[int]:
@@ -121,10 +208,9 @@ def _normalize_mileage(raw: str) -> Optional[int]:
     return value if 0 <= value <= 2_000_000 else None
 
 
-def extract_mileage(pages: list[tuple[int, str]]) -> FieldValue:
-    candidates: list[tuple[int, str, int]] = []
+def extract_mileage(pages: list[tuple[int, str]], words: list[LayoutWord] | None = None) -> FieldValue:
+    candidates: list[dict[str, Any]] = []
     scores: Counter[int] = Counter()
-    raw_for_value: dict[int, tuple[int, str]] = {}
     for page_number, page_text, match in _iter_matches(pages, MILEAGE_PATTERN):
         raw = match.group(0)
         value = _normalize_mileage(raw)
@@ -132,6 +218,10 @@ def extract_mileage(pages: list[tuple[int, str]]) -> FieldValue:
             continue  # Años no son odómetros.
         start, end = match.span()
         context = _comparison_text(page_text[max(0, start - 70) : min(len(page_text), end + 70)])
+        has_labeled_context = bool(re.search(r"\b(KILOMETRAJE|KILOMETROS?|ODOMETRO)\b", context))
+        has_km_context = bool(re.search(r"\bKM\b", context))
+        if not has_labeled_context and not has_km_context:
+            continue  # Un número sin evidencia semántica no se trata como odómetro.
         score = 1
         if raw.lstrip().startswith("0") and len(re.sub(r"\D", "", raw)) >= 6:
             score -= 6  # Códigos de operación/refacción suelen tener ceros iniciales.
@@ -143,18 +233,53 @@ def extract_mileage(pages: list[tuple[int, str]]) -> FieldValue:
             score += 4
         if re.search(r"\b(SERVICIO|OPERACION|PARTE|COSTO|TOTAL|IVA|SUBTOTAL)\b", context):
             score -= 4
-        candidates.append((page_number, raw, value))
+        pattern_confidence = 0.97 if has_labeled_context else 0.84
+        confidence_score = _combined_pattern_token_confidence(
+            pattern_confidence, _token_confidence(words or [], page_number, raw)
+        )
+        candidates.append({
+            "source_page": page_number,
+            "raw_value": raw,
+            "normalized_value": value,
+            "ranking_score": score,
+            "confidence_score": confidence_score,
+        })
         scores[value] += score
-        raw_for_value.setdefault(value, (page_number, raw))
     if not candidates:
         return FieldValue()
     selected = max(
         scores,
-        key=lambda value: (scores[value], sum(item[2] == value for item in candidates), -next(index for index, item in enumerate(candidates) if item[2] == value)),
+        key=lambda value: (
+            scores[value],
+            sum(item["normalized_value"] == value for item in candidates),
+            -next(index for index, item in enumerate(candidates) if item["normalized_value"] == value),
+        ),
     )
-    page, raw = raw_for_value[selected]
-    occurrences = sum(item[2] == selected for item in candidates)
-    return FieldValue(raw_value=raw, normalized_value=selected, confidence=_confidence(scores[selected], occurrences), source_page=page)
+    selected_candidate = max(
+        (item for item in candidates if item["normalized_value"] == selected),
+        key=lambda item: item["confidence_score"],
+    )
+    competing = [
+        item for item in candidates
+        if item["normalized_value"] != selected
+        and scores[item["normalized_value"]] >= scores[selected] - 1
+        and abs(item["confidence_score"] - selected_candidate["confidence_score"]) <= 0.05
+    ]
+    ambiguous = bool(competing)
+    confidence_score = min(selected_candidate["confidence_score"], 0.75) if ambiguous else selected_candidate["confidence_score"]
+    public_candidates = [
+        {
+            "raw_value": item["raw_value"],
+            "normalized_value": item["normalized_value"],
+            "source_page": item["source_page"],
+            "confidence_score": round(item["confidence_score"], 4),
+        }
+        for item in candidates
+    ]
+    return FieldValue(
+        selected_candidate["raw_value"], selected, _confidence_label(confidence_score),
+        selected_candidate["source_page"], confidence_score, public_candidates, ambiguous,
+    )
 
 
 def extract_vin(pages: list[tuple[int, str]]) -> FieldValue:
@@ -362,6 +487,286 @@ def _layout_lines(words: list[LayoutWord], tolerance: float = 3.0) -> list[Layou
     return lines
 
 
+def _bounding_box(word: LayoutWord) -> dict[str, float]:
+    return {
+        "x0": round(word.x0, 2),
+        "x1": round(word.x1, 2),
+        "top": round(word.top, 2),
+        "bottom": round(word.bottom, 2),
+    }
+
+
+def _spatial_candidate(
+    *, value: Any, raw: str, label: str, word: LayoutWord, score: float, reasons: list[str]
+) -> dict[str, Any]:
+    return {
+        "value": value.isoformat() if isinstance(value, date) else value,
+        "rawText": raw,
+        "label": label,
+        "page": word.page_number,
+        "boundingBox": _bounding_box(word),
+        "score": round(max(0.0, min(1.0, score)), 4),
+        "reasons": reasons,
+        "selected": False,
+    }
+
+
+def _field_from_spatial_candidates(
+    candidates: list[dict[str, Any]], *, is_date: bool = False, force_ambiguous: bool = False
+) -> FieldValue:
+    if not candidates:
+        return FieldValue()
+    ranked = sorted(candidates, key=lambda candidate: candidate["score"], reverse=True)
+    selected_value = ranked[0]["value"]
+    distinct_values = {candidate["value"] for candidate in ranked}
+    ambiguous = force_ambiguous or any(
+        candidate["value"] != selected_value
+        and candidate["score"] >= ranked[0]["score"] - 0.08
+        for candidate in ranked[1:]
+    )
+    selected_score = min(ranked[0]["score"], 0.75) if ambiguous else ranked[0]["score"]
+    public_candidates = [
+        {**candidate, "selected": candidate["value"] == selected_value}
+        for candidate in ranked
+    ]
+    normalized: Any = date.fromisoformat(selected_value) if is_date else selected_value
+    return FieldValue(
+        raw_value=ranked[0]["rawText"],
+        normalized_value=normalized,
+        confidence=_confidence_label(selected_score),
+        source_page=ranked[0]["page"],
+        confidence_score=selected_score,
+        candidates=public_candidates,
+        ambiguous=ambiguous,
+    )
+
+
+def extract_spatial_date(words: list[LayoutWord]) -> FieldValue:
+    """Prioriza fechas unidas a etiquetas por geometría, no por orden del texto plano."""
+    lines = _layout_lines(words)
+    candidates: list[dict[str, Any]] = []
+    for line in lines:
+        for label_word in line.words:
+            label = _semantic_text(label_word.text)
+            if label == "FECHA":
+                values = [
+                    word for word in line.words
+                    if word.x0 >= label_word.x1
+                    and word.x0 - label_word.x1 <= 180
+                    and _normalize_date(word.text) is not None
+                ]
+                if values:
+                    value_word = min(values, key=lambda word: word.x0)
+                    normalized = _normalize_date(value_word.text)
+                    assert normalized is not None
+                    candidates.append(_spatial_candidate(
+                        value=normalized,
+                        raw=value_word.text,
+                        label="Fecha",
+                        word=value_word,
+                        score=_combined_pattern_token_confidence(0.99, value_word.confidence),
+                        reasons=["Fecha situada a la derecha de la etiqueta Fecha."],
+                    ))
+            if label in {"REPAR", "REPARACION"} or label.endswith("REPAR"):
+                below = [
+                    word for candidate_line in lines
+                    if candidate_line.page_number == line.page_number
+                    and 0 <= candidate_line.top - line.bottom <= 45
+                    for word in candidate_line.words
+                    if _normalize_date(word.text) is not None
+                    and label_word.x0 - 20 <= (word.x0 + word.x1) / 2 <= label_word.x1 + 20
+                ]
+                if below:
+                    value_word = min(below, key=lambda word: word.top)
+                    normalized = _normalize_date(value_word.text)
+                    assert normalized is not None
+                    candidates.append(_spatial_candidate(
+                        value=normalized,
+                        raw=value_word.text,
+                        label="F. Repar.",
+                        word=value_word,
+                        score=_combined_pattern_token_confidence(0.97, value_word.confidence),
+                        reasons=["Fecha situada debajo del encabezado F. Repar."],
+                    ))
+    counts = Counter(candidate["value"] for candidate in candidates)
+    for candidate in candidates:
+        if counts[candidate["value"]] > 1:
+            candidate["score"] = round(min(1.0, candidate["score"] + 0.01), 4)
+            candidate["reasons"] = [*candidate["reasons"], "La misma fecha aparece en otra referencia de servicio."]
+    return _field_from_spatial_candidates(candidates, is_date=True)
+
+
+def _integer_word_value(word: LayoutWord) -> int | None:
+    raw = word.text.strip()
+    if re.fullmatch(r"\d{1,3}(?:[,\s]\d{3})+|\d{4,7}", raw) is None:
+        return None
+    value = _normalize_mileage(raw)
+    if value is None or 1900 <= value <= 2100:
+        return None
+    return value
+
+
+def extract_spatial_mileage(words: list[LayoutWord]) -> FieldValue:
+    """Selecciona el odómetro por etiqueta, columna y distancia vertical."""
+    lines = _layout_lines(words)
+    candidates: list[dict[str, Any]] = []
+    for line in lines:
+        for label_word in line.words:
+            label = _semantic_text(label_word.text)
+            if label not in {"KM ENT", "KM SAL", "KILOMETRAJE", "ODOMETRO", "ODOMETER"}:
+                continue
+            same_line = [
+                word for word in line.words
+                if word.x0 >= label_word.x1
+                and word.x0 - label_word.x1 <= 170
+                and _integer_word_value(word) is not None
+            ]
+            below = [
+                word for candidate_line in lines
+                if candidate_line.page_number == line.page_number
+                and 0 <= candidate_line.top - line.bottom <= 55
+                for word in candidate_line.words
+                if _integer_word_value(word) is not None
+                and label_word.x0 - 15 <= (word.x0 + word.x1) / 2 <= label_word.x1 + 15
+            ]
+            pool = same_line if same_line else below
+            if not pool:
+                continue
+            value_word = min(pool, key=lambda word: (abs(word.top - label_word.bottom), abs(word.x0 - label_word.x1)))
+            value = _integer_word_value(value_word)
+            assert value is not None
+            in_column = value_word in below and value_word not in same_line
+            base_score = 0.96 if label in {"KM ENT", "KM SAL"} and in_column else 0.94
+            candidates.append(_spatial_candidate(
+                value=value,
+                raw=value_word.text,
+                label={"KM ENT": "Km.Ent.", "KM SAL": "Km.Sal."}.get(label, label_word.text),
+                word=value_word,
+                score=_combined_pattern_token_confidence(base_score, value_word.confidence),
+                reasons=[
+                    "Valor situado debajo del encabezado y dentro de la misma columna."
+                    if in_column else
+                    "Valor situado junto a una etiqueta explícita de odómetro."
+                ],
+            ))
+
+    counts = Counter(candidate["value"] for candidate in candidates)
+    for candidate in candidates:
+        if counts[candidate["value"]] > 1:
+            candidate["score"] = round(min(1.0, candidate["score"] + 0.03), 4)
+            candidate["reasons"] = [
+                *candidate["reasons"],
+                "Km.Ent. y Km.Sal. coinciden; se incrementa la confianza.",
+            ]
+    distinct_strong = {
+        candidate["value"] for candidate in candidates
+        if candidate["score"] >= 0.90
+    }
+    force_ambiguous = len(distinct_strong) > 1
+    if force_ambiguous:
+        # Sin una regla de negocio adicional, Km.Sal. es sólo una selección tentativa.
+        for candidate in candidates:
+            if candidate["label"] == "Km.Sal.":
+                candidate["score"] = max(item["score"] for item in candidates) + 0.001
+                candidate["reasons"] = [
+                    *candidate["reasons"],
+                    "Km.Ent. y Km.Sal. difieren; Km.Sal. es tentativo y requiere revisión.",
+                ]
+    return _field_from_spatial_candidates(candidates, force_ambiguous=force_ambiguous)
+
+
+def _concept_field(
+    raw: str | None, normalized: Any, *, page: int | None = None, score: float = 0.94,
+    label: str | None = None, word: LayoutWord | None = None, reason: str = ""
+) -> FieldValue:
+    if raw is None:
+        return FieldValue()
+    candidates = []
+    if word is not None:
+        candidates.append(_spatial_candidate(
+            value=normalized, raw=raw, label=label or "", word=word, score=score,
+            reasons=[reason] if reason else [],
+        ) | {"selected": True})
+    return FieldValue(raw, normalized, _confidence_label(score), page, score, candidates)
+
+
+def extract_document_concepts(
+    pages: list[tuple[int, str]], words: list[LayoutWord], actual_mileage: FieldValue,
+    repair_order: FieldValue,
+) -> dict[str, FieldValue]:
+    """Mantiene separados odómetro, intervalo, códigos, partes, importes y orden."""
+    text = "\n".join(page_text for _, page_text in pages)
+    comparable = _comparison_text(text)
+    interval_match = re.search(
+        r"\bSERVICIO\s+(?:DE\s+)?(\d{1,3})\s*(MIL|,?000)?\s*KM\b", comparable
+    )
+    interval = FieldValue()
+    if interval_match:
+        number = int(interval_match.group(1))
+        interval_value = number * 1000 if interval_match.group(2) in {"MIL", "000", ",000"} else number
+        interval = _concept_field(
+            interval_match.group(0), interval_value, page=pages[0][0] if pages else None,
+            score=0.96, label="Servicio programado",
+        )
+
+    lines = _layout_lines(words)
+    operation_headers = [
+        word for word in words if _semantic_text(word.text) in {"OPERACION", "N OPERACION"}
+    ]
+    operation_candidates = [
+        word for word in words
+        if re.fullmatch(r"0\d{5,9}", word.text.strip())
+        and any(
+            header.page_number == word.page_number
+            and -5 <= word.top - header.bottom <= 65
+            for header in operation_headers
+        )
+    ]
+    operation_word = min(operation_candidates, key=lambda word: word.top, default=None)
+    operation = _concept_field(
+        operation_word.text if operation_word else None,
+        operation_word.text if operation_word else None,
+        page=operation_word.page_number if operation_word else None,
+        score=0.97,
+        label="#Operación",
+        word=operation_word,
+        reason="Código con cero inicial dentro de la sección #Operación; se excluye del odómetro.",
+    )
+
+    part_values: list[str] = []
+    amount_values: list[float] = []
+    for line in lines:
+        semantic_words = [_semantic_text(word.text) for word in line.words]
+        if "PARTE" in semantic_words:
+            header_index = semantic_words.index("PARTE")
+            for word in line.words[header_index + 1:]:
+                if _semantic_text(word.text) == "COSTO":
+                    break
+                if re.search(r"\d", word.text) and word.text not in part_values:
+                    part_values.append(word.text)
+                    break
+        has_amount_label = any(label in semantic_words for label in ("COSTO", "TOTAL", "SUB TOTAL"))
+        if has_amount_label:
+            for word in line.words:
+                if re.fullmatch(r"\$?\d{1,7}[.,]\d{2}", word.text.strip()):
+                    amount = float(word.text.replace("$", "").replace(",", ""))
+                    if amount not in amount_values:
+                        amount_values.append(amount)
+
+    return {
+        "actualMileage": actual_mileage,
+        "serviceIntervalKm": interval,
+        "operationCode": operation,
+        "partNumber": _concept_field(", ".join(part_values) or None, part_values or None, score=0.90),
+        "monetaryAmount": _concept_field(
+            ", ".join(f"{value:.2f}" for value in amount_values) or None,
+            amount_values or None,
+            score=0.95,
+        ),
+        "invoiceOrOrderNumber": repair_order,
+    }
+
+
 def _find_history_columns(lines: list[LayoutLine]) -> dict[int, HistoryColumns]:
     columns: dict[int, HistoryColumns] = {}
     for line in lines:
@@ -408,7 +813,8 @@ def _history_generated_at(lines: list[LayoutLine], columns: dict[int, HistoryCol
             if word.x0 <= page_columns.date_end and DATE_PATTERN.fullmatch(word.text):
                 normalized = _normalize_date(word.text)
                 if normalized:
-                    return FieldValue(word.text, normalized, "medium", line.page_number)
+                    token_score = word.confidence if word.confidence is not None else 0.78
+                    return FieldValue(word.text, normalized, _confidence_label(token_score), line.page_number, token_score)
     return FieldValue()
 
 
@@ -427,7 +833,15 @@ def _history_event_from_record(record: dict[str, Any]) -> ParsedServiceEvent:
         warnings = [*warnings, "Fila de historial sin fecha de servicio válida."]
     if mileage.normalized_value is None:
         warnings = [*warnings, "Fila de historial sin kilometraje en la columna Kms."]
-    confidence = "high" if service_date.normalized_value and mileage.normalized_value is not None else "low"
+    confidence_score = min(service_date.confidence_score, mileage.confidence_score)
+    confidence = _confidence_label(confidence_score)
+    field_review = (
+        service_date.normalized_value is None
+        or mileage.normalized_value is None
+        or service_date.ambiguous
+        or mileage.ambiguous
+        or confidence_score < OCR_REVIEW_THRESHOLD
+    )
     return ParsedServiceEvent(
         service_date=service_date,
         mileage=mileage,
@@ -440,7 +854,8 @@ def _history_event_from_record(record: dict[str, Any]) -> ParsedServiceEvent:
         work_evidence=record["work_evidence"],
         resets_maintenance_interval=resets,
         confidence=confidence,
-        requires_human_review=review or service_date.normalized_value is None or mileage.normalized_value is None,
+        requires_human_review=review or field_review,
+        confidence_score=confidence_score,
         warnings=warnings,
     )
 
@@ -491,13 +906,16 @@ def parse_service_history(result: ExtractionResult, fields: dict[str, FieldValue
             ]
             current = {
                 "service_date": FieldValue(
-                    date_word.text, _normalize_date(date_word.text), "high", line.page_number
+                    date_word.text, _normalize_date(date_word.text),
+                    _confidence_label(date_word.confidence if date_word.confidence is not None else 0.96),
+                    line.page_number, date_word.confidence if date_word.confidence is not None else 0.96,
                 ),
                 "mileage": FieldValue(
                     kilometer_word.text if kilometer_word else None,
                     _normalize_mileage(kilometer_word.text) if kilometer_word else None,
-                    "high" if kilometer_word else "low",
+                    _confidence_label(kilometer_word.confidence if kilometer_word and kilometer_word.confidence is not None else 0.96 if kilometer_word else 0.0),
                     line.page_number,
+                    kilometer_word.confidence if kilometer_word and kilometer_word.confidence is not None else 0.96 if kilometer_word else 0.0,
                 ),
                 "repair_order_number": FieldValue(
                     _words_text(order_words) or None,
@@ -564,10 +982,15 @@ def parse_document(result: ExtractionResult) -> ParsedDocument:
     fields = extract_history_vehicle(pages) if document_type == "historial_servicio" else extract_vehicle(pages)
     if document_type == "historial_servicio" and result.words:
         return parse_service_history(result, fields)
-    service_date = extract_date(pages)
-    mileage = extract_mileage(pages)
+    service_date = extract_spatial_date(result.words) if result.words else FieldValue()
+    if service_date.normalized_value is None:
+        service_date = extract_date(pages, result.words)
+    mileage = extract_spatial_mileage(result.words) if result.words else FieldValue()
+    if mileage.normalized_value is None:
+        mileage = extract_mileage(pages, result.words)
     dealer = extract_dealer(pages)
     repair_order = extract_repair_order(pages)
+    fields.update(extract_document_concepts(pages, result.words, mileage, repair_order))
     lines = _service_lines(pages)
     description = " / ".join(lines) or None
     category, service_type, resets, review, classification_warnings = classify_service_event(
@@ -578,9 +1001,19 @@ def parse_document(result: ExtractionResult) -> ParsedDocument:
     warnings = list(result.warnings)
     if not service_date.normalized_value:
         warnings.append("No se detectó una fecha de servicio confiable.")
+    elif service_date.ambiguous:
+        warnings.append("Se detectaron varias fechas posibles; confirma la fecha de servicio.")
     if mileage.normalized_value is None:
         warnings.append("No se detectó un kilometraje confiable.")
-    event_confidence = "high" if service_date.confidence == mileage.confidence == "high" and resets is True else "medium"
+    elif mileage.ambiguous:
+        warnings.append("Se detectaron varios kilometrajes posibles; confirma la lectura correcta.")
+    event_confidence_score = min(service_date.confidence_score, mileage.confidence_score)
+    event_confidence = _confidence_label(event_confidence_score)
+    field_review = (
+        event_confidence_score < OCR_REVIEW_THRESHOLD
+        or service_date.ambiguous
+        or mileage.ambiguous
+    )
     event = ParsedServiceEvent(
         service_date=service_date,
         mileage=mileage,
@@ -593,7 +1026,8 @@ def parse_document(result: ExtractionResult) -> ParsedDocument:
         work_evidence=[{"raw_text": line, "source_page": None, "coordinates": None} for line in lines],
         resets_maintenance_interval=resets,
         confidence=event_confidence,
-        requires_human_review=review or not service_date.normalized_value or mileage.normalized_value is None,
+        requires_human_review=review or field_review or not service_date.normalized_value or mileage.normalized_value is None,
+        confidence_score=event_confidence_score,
         warnings=classification_warnings,
     )
     return ParsedDocument(document_type, document_confidence, fields, [event], warnings)

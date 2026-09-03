@@ -1,8 +1,70 @@
 <!doctype html>
-<html lang="es-MX"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Dashboard · Validador</title><link rel="stylesheet" href="/css/styles.css"></head>
-<body><div class="app-shell">
-  <aside class="sidebar"><a class="brand" href="/"><span class="brand-mark">✓</span><span><strong>Validador</strong><small>Mantenimiento vehicular</small></span></a><p class="nav-label">OPERACIÓN</p><nav><ul class="nav-list"><li><a class="active" href="/"><span class="nav-icon">▦</span>Dashboard</a></li><li><a href="/vehicles.html"><span class="nav-icon">▤</span>Vehículos</a></li><li><a href="/register_maintenance.html"><span class="nav-icon">◷</span>Último mantenimiento</a></li><li><a href="/validate_document.html"><span class="nav-icon">⌁</span>Validar documento</a></li><li><a href="/history.html"><span class="nav-icon">☷</span>Historial</a></li></ul></nav><div class="side-footer">Fase 1 · Reglas deterministas<br>10,000 km o 6 meses</div></aside>
-  <main class="page"><header class="page-header"><div><p class="eyebrow">Resumen operativo</p><h1>Dashboard</h1><p class="subtitle">Consulta el estado general de los documentos de mantenimiento y las últimas decisiones del sistema.</p></div><a class="button button-primary" href="/validate_document.html">⌁ Validar documento</a></header>
-  <section class="metrics"><article class="metric teal"><span class="metric-label">Vehículos registrados</span><p class="metric-value" id="vehicles-count">—</p><p class="metric-note">Activos e inactivos</p></article><article class="metric"><span class="metric-label">Validaciones</span><p class="metric-value" id="validations-count">—</p><p class="metric-note">Histórico total</p></article><article class="metric success"><span class="metric-label">Intervalos cumplidos</span><p class="metric-value" id="approved-count">—</p><p class="metric-note">Dentro de 10,000 km y 6 meses</p></article><article class="metric danger"><span class="metric-label">Rechazados</span><p class="metric-value" id="rejected-count">—</p><p class="metric-note">Con errores críticos</p></article><article class="metric warning"><span class="metric-label">Límites excedidos</span><p class="metric-value" id="outside-count">—</p><p class="metric-note">Kilometraje, tiempo o ambos</p></article></section>
-  <section class="card"><div class="card-header"><div><h2 class="card-title">Últimas validaciones</h2><p class="card-subtitle">Resultados más recientes y trazables</p></div><a class="button button-secondary button-small" href="/history.html">Ver historial</a></div><div class="table-wrap"><table class="data-table"><thead><tr><th>ID</th><th>Vehículo</th><th>Fecha documento</th><th>Odómetro</th><th>Estado</th><th>Fecha de validación</th></tr></thead><tbody id="latest-table"><tr><td colspan="6" class="loading">Cargando información…</td></tr></tbody></table></div></section>
-  </main></div><script src="/js/api.js"></script><script src="/js/dashboard.js"></script></body></html>
+<html lang="es-MX">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Auditoría del historial de mantenimiento vehicular">
+  <title>Auditoría de mantenimiento · Validador</title>
+  <link rel="stylesheet" href="/css/styles.css">
+</head>
+<body>
+<div class="app-shell audit-shell">
+  <aside class="sidebar">
+    <a class="brand agency-brand" href="/"><span class="brand-mark">✓</span><span><strong>[NOMBRE DE LA AGENCIA]</strong><small>Auditoría de mantenimiento</small></span></a>
+    <p class="nav-label">OPERACIÓN</p>
+    <nav aria-label="Navegación principal"><ul class="nav-list">
+      <li><a class="active" href="/"><span class="nav-icon">⌕</span>Auditoría historial</a></li>
+      <li><a href="/dashboard.html"><span class="nav-icon">▦</span>Dashboard</a></li>
+      <li><a href="/vehicles.html"><span class="nav-icon">▤</span>Vehículos</a></li>
+      <li><a href="/register_maintenance.html"><span class="nav-icon">◷</span>Último mantenimiento</a></li>
+      <li><a href="/validate_document.html"><span class="nav-icon">⌁</span>Validar documento</a></li>
+      <li><a href="/history.html"><span class="nav-icon">☷</span>Historial</a></li>
+    </ul></nav>
+    <div class="side-footer">Fase 1 · Reglas deterministas<br>10,000 km o 6 meses</div>
+  </aside>
+
+  <main class="page audit-page" id="new-analysis">
+    <header class="audit-header">
+      <div><p class="eyebrow">Nuevo análisis</p><h1>Verifica el historial sin descifrar cada sello.</h1><p class="subtitle">Sube fotografías de un solo vehículo. Se aceptan libros de servicio, facturas y órdenes de trabajo.</p></div>
+      <span class="audit-rule-pill">✓ 6 meses o 10,000 km</span>
+    </header>
+
+    <div class="audit-workspace">
+      <aside class="audit-controls" aria-label="Carga y reglas del análisis">
+        <div class="field audit-vehicle-field"><label for="audit-vehicle">Vehículo <span class="required">*</span></label><select id="audit-vehicle" required><option value="">Cargando vehículos…</option></select><small>Las imágenes deben pertenecer al mismo vehículo.</small></div>
+        <div id="audit-dropzone" class="audit-dropzone">
+          <input id="audit-files" class="visually-hidden" type="file" accept="image/jpeg,image/png,image/webp" multiple aria-describedby="audit-upload-help audit-upload-error">
+          <button id="audit-file-trigger" class="audit-upload-trigger" type="button">
+            <span class="audit-upload-icon" aria-hidden="true">⇧</span>
+            <strong>Arrastra o selecciona imágenes</strong>
+            <span id="audit-upload-help">JPG, PNG o WEBP · máximo 15 · 10 MB c/u</span>
+          </button>
+        </div>
+        <p id="audit-upload-error" class="audit-field-error" role="alert"></p>
+        <div id="audit-previews" class="audit-previews-panel hidden" aria-label="Imágenes seleccionadas"></div>
+        <p id="audit-demo-note" class="audit-demo-note hidden">Las imágenes se mantienen locales hasta que presiones “Analizar imágenes”.</p>
+        <div id="audit-process-status" class="audit-process-status hidden" role="status"><div><strong id="audit-progress-label">Preparando análisis…</strong><button id="audit-cancel" type="button">Cancelar</button></div><progress id="audit-progress" max="1" value="0"></progress><small id="audit-current-file"></small></div>
+        <div id="audit-partial-error" class="notice error" role="alert"></div>
+        <div class="audit-upload-actions"><button id="audit-analyze" class="button button-primary" type="button" disabled>✦ Analizar imágenes</button><button id="audit-retry" class="button button-secondary hidden" type="button">↻ Reintentar fallidas</button><button id="audit-example" class="button button-secondary audit-example" type="button"><span aria-hidden="true">▧</span><span>Ver análisis de ejemplo</span></button></div>
+        <div class="audit-rules">
+          <article class="audit-rule"><span aria-hidden="true">▣</span><strong>Máximo 6 meses</strong><small>Entre fechas consecutivas</small></article>
+          <article class="audit-rule"><span aria-hidden="true">◔</span><strong>Máximo 10,000 km</strong><small>Entre lecturas consecutivas</small></article>
+        </div>
+      </aside>
+
+      <section id="audit-result" class="audit-result" aria-live="polite">
+        <div class="audit-empty">
+          <span class="audit-empty-icon" aria-hidden="true">✓</span>
+          <h2>Aquí aparecerá el dictamen</h2>
+          <p>El historial mostrará fechas, kilometrajes, confianza de lectura y cada intervalo que exceda las reglas.</p>
+        </div>
+      </section>
+    </div>
+    <div id="audit-new-action" class="audit-new-action hidden"><button id="audit-reset" class="button button-primary" type="button">↻ Comenzar nuevo análisis</button></div>
+  </main>
+</div>
+<script src="/js/api.js"></script>
+<script src="/js/maintenance-analysis-api.js"></script>
+<script src="/js/audit.js"></script>
+</body>
+</html>
