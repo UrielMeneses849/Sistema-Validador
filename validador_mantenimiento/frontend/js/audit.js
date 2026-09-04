@@ -303,7 +303,7 @@ function resetAudit() {
   uploadError.textContent = ""
   dropzone.classList.remove("has-error")
   renderPreviews()
-  resultPanel.innerHTML = '<div class="audit-empty"><span class="audit-empty-icon" aria-hidden="true">✓</span><h2>Aquí aparecerá el dictamen</h2><p>El historial mostrará fechas, kilometrajes, confianza de lectura y cada intervalo que exceda las reglas.</p></div>'
+  resultPanel.innerHTML = '<div class="audit-empty"><span class="audit-empty-icon" aria-hidden="true">✓</span><p class="card-kicker">Dictamen</p><h2>Esperando análisis</h2><p>Selecciona un vehículo y carga sus documentos para comenzar la auditoría de su historial.</p></div>'
   newAction.classList.add("hidden")
   retryButton.classList.add("hidden")
   processStatus.classList.add("hidden")

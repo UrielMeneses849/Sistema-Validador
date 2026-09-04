@@ -4,34 +4,37 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="description" content="Auditoría del historial de mantenimiento vehicular">
-  <title>Auditoría de mantenimiento · Validador</title>
+  <title>Auditoría de historial · InteliDrive</title>
   <link rel="stylesheet" href="/css/styles.css">
 </head>
 <body>
 <div class="app-shell audit-shell">
   <aside class="sidebar">
-    <a class="brand agency-brand" href="/"><span class="brand-mark">✓</span><span><strong>[NOMBRE DE LA AGENCIA]</strong><small>Auditoría de mantenimiento</small></span></a>
+    <a class="brand agency-brand" href="/" aria-label="InteliDrive, inicio"><span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 32 32"><path d="M6 20.5c2.8-6.1 6.1-9.3 10-9.7 4.2-.4 7.5 2.3 10 8.2M9 20h14M11 24h10"/></svg></span><span><strong>InteliDrive</strong><small>Vehicle Intelligence</small></span></a>
     <p class="nav-label">OPERACIÓN</p>
     <nav aria-label="Navegación principal"><ul class="nav-list">
-      <li><a class="active" href="/"><span class="nav-icon">⌕</span>Auditoría historial</a></li>
-      <li><a href="/dashboard.html"><span class="nav-icon">▦</span>Dashboard</a></li>
-      <li><a href="/vehicles.html"><span class="nav-icon">▤</span>Vehículos</a></li>
-      <li><a href="/register_maintenance.html"><span class="nav-icon">◷</span>Último mantenimiento</a></li>
-      <li><a href="/validate_document.html"><span class="nav-icon">⌁</span>Validar documento</a></li>
-      <li><a href="/history.html"><span class="nav-icon">☷</span>Historial</a></li>
+      <li><a class="active" href="/"><span class="nav-icon" aria-hidden="true">⌕</span>Auditoría historial</a></li>
+      <li><a href="/dashboard.html"><span class="nav-icon" aria-hidden="true">▦</span>Dashboard</a></li>
+      <li><a href="/vehicles.html"><span class="nav-icon" aria-hidden="true">▤</span>Vehículos</a></li>
+      <li><a href="/register_maintenance.html"><span class="nav-icon" aria-hidden="true">◷</span>Últimos mantenimientos</a></li>
+      <li><a href="/validate_document.html"><span class="nav-icon" aria-hidden="true">⌁</span>Validar documento</a></li>
+      <li><a href="/history.html"><span class="nav-icon" aria-hidden="true">☷</span>Historial</a></li>
     </ul></nav>
-    <div class="side-footer">Fase 1 · Reglas deterministas<br>10,000 km o 6 meses</div>
+    <div class="side-footer"><span>Powered by</span><strong>NEXVORA</strong></div>
   </aside>
 
   <main class="page audit-page" id="new-analysis">
+    <div class="topbar"><div><strong>Panel operativo</strong><small>Bienvenido a InteliDrive</small></div><span class="system-status"><i></i>Datos y decisiones en movimiento</span></div>
     <header class="audit-header">
-      <div><p class="eyebrow">Nuevo análisis</p><h1>Verifica el historial sin descifrar cada sello.</h1><p class="subtitle">Sube fotografías de un solo vehículo. Se aceptan libros de servicio, facturas y órdenes de trabajo.</p></div>
-      <span class="audit-rule-pill">✓ 6 meses o 10,000 km</span>
+      <div class="audit-hero-copy"><p class="eyebrow">Auditoría inteligente</p><h1>Verifica el historial<br>sin descifrar <em>cada sello.</em></h1><p class="subtitle">Analiza la cronología de mantenimiento, kilometraje y consistencia documental de cada vehículo desde un solo lugar.</p></div>
+      <div class="hero-benefits" aria-hidden="true"><span><b>Más control</b><small>Decisiones basadas en datos</small></span><span><b>Más confianza</b><small>Historiales verificables</small></span><span><b>Más eficiencia</b><small>Todo en un solo sistema</small></span></div>
+      <div class="automotive-visual" aria-hidden="true"><span>VEHÍCULOS<br>EN MEJORES<br>MANOS</span></div>
     </header>
+    <div class="audit-flow" aria-label="Proceso de auditoría"><div class="active"><b>01</b><span><strong>Seleccionar vehículo</strong><small>Elige un vehículo de tu flota</small></span></div><i></i><div><b>02</b><span><strong>Analizar historial</strong><small>Procesamos la información</small></span></div><i></i><div><b>03</b><span><strong>Obtener dictamen</strong><small>Conoce el resultado</small></span></div></div>
 
     <div class="audit-workspace">
       <aside class="audit-controls" aria-label="Carga y reglas del análisis">
-        <div class="field audit-vehicle-field"><label for="audit-vehicle">Vehículo <span class="required">*</span></label><select id="audit-vehicle" required><option value="">Cargando vehículos…</option></select><small>Las imágenes deben pertenecer al mismo vehículo.</small></div>
+        <div class="field audit-vehicle-field"><p class="card-kicker">Vehículo</p><h2>Selecciona el vehículo que quieres auditar.</h2><label for="audit-vehicle">Vehículo <span class="required">*</span></label><select id="audit-vehicle" required><option value="">Cargando vehículos…</option></select><small>Las imágenes deben pertenecer al mismo vehículo.</small></div>
         <div id="audit-dropzone" class="audit-dropzone">
           <input id="audit-files" class="visually-hidden" type="file" accept="image/jpeg,image/png,image/webp" multiple aria-describedby="audit-upload-help audit-upload-error">
           <button id="audit-file-trigger" class="audit-upload-trigger" type="button">
@@ -46,20 +49,18 @@
         <div id="audit-process-status" class="audit-process-status hidden" role="status"><div><strong id="audit-progress-label">Preparando análisis…</strong><button id="audit-cancel" type="button">Cancelar</button></div><progress id="audit-progress" max="1" value="0"></progress><small id="audit-current-file"></small></div>
         <div id="audit-partial-error" class="notice error" role="alert"></div>
         <div class="audit-upload-actions"><button id="audit-analyze" class="button button-primary" type="button" disabled>✦ Analizar imágenes</button><button id="audit-retry" class="button button-secondary hidden" type="button">↻ Reintentar fallidas</button><button id="audit-example" class="button button-secondary audit-example" type="button"><span aria-hidden="true">▧</span><span>Ver análisis de ejemplo</span></button></div>
-        <div class="audit-rules">
-          <article class="audit-rule"><span aria-hidden="true">▣</span><strong>Máximo 6 meses</strong><small>Entre fechas consecutivas</small></article>
-          <article class="audit-rule"><span aria-hidden="true">◔</span><strong>Máximo 10,000 km</strong><small>Entre lecturas consecutivas</small></article>
-        </div>
       </aside>
 
       <section id="audit-result" class="audit-result" aria-live="polite">
         <div class="audit-empty">
           <span class="audit-empty-icon" aria-hidden="true">✓</span>
-          <h2>Aquí aparecerá el dictamen</h2>
-          <p>El historial mostrará fechas, kilometrajes, confianza de lectura y cada intervalo que exceda las reglas.</p>
+          <p class="card-kicker">Dictamen</p>
+          <h2>Esperando análisis</h2>
+          <p>Selecciona un vehículo y carga sus documentos para comenzar la auditoría de su historial.</p>
         </div>
       </section>
     </div>
+    <section class="criteria-section" aria-labelledby="criteria-title"><header><span aria-hidden="true">⚙</span><div><h2 id="criteria-title">Criterios de validación</h2><p>Reglas utilizadas para el análisis del historial de mantenimiento</p></div></header><div class="audit-rules"><article class="audit-rule"><span aria-hidden="true">▣</span><div><small>INTERVALO TEMPORAL</small><strong>≤ 6 meses</strong><small>Periodo máximo entre mantenimientos.</small></div><b>Regla determinista</b></article><article class="audit-rule"><span aria-hidden="true">◔</span><div><small>KILOMETRAJE</small><strong>≤ 10,000 km</strong><small>Distancia máxima entre servicios.</small></div><b>Regla determinista</b></article></div></section>
     <div id="audit-new-action" class="audit-new-action hidden"><button id="audit-reset" class="button button-primary" type="button">↻ Comenzar nuevo análisis</button></div>
   </main>
 </div>
