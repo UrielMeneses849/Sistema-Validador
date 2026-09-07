@@ -15,6 +15,7 @@ from app.services.document_service import (
     get_document_or_raise,
     save_document,
 )
+from app.services.extraction_service import OcrProcessingError, OcrUnavailableError
 from app.services.vehicle_service import VehicleNotFoundError
 
 
@@ -62,6 +63,10 @@ def analyze(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     except DocumentAnalysisReprocessConflict as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except OcrUnavailableError as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
+    except OcrProcessingError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
 
 
 @router.get("/{document_id}/analysis", response_model=DocumentAnalysisRead)

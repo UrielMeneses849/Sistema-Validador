@@ -24,15 +24,59 @@ def update_service_event(db: Session, event_id: int, payload: ServiceEventUpdate
     updates = payload.model_dump(exclude_unset=True)
     for field, value in updates.items():
         setattr(event, field, value)
-        if field == "service_date" and value is not None:
-            event.service_date_raw = value.isoformat()
-        if field == "mileage_km" and value is not None:
-            event.mileage_raw = str(value)
+        if field == "service_date":
+            event.service_date_raw = value.isoformat() if value is not None else None
+        if field == "mileage_km":
+            event.mileage_raw = str(value) if value is not None else None
     if updates:
         event.user_confirmed = True
-        event.requires_human_review = False
-        event.confidence = "high"
-        event.warnings = []
+        fields_complete = event.service_date is not None and event.mileage_km is not None
+        event.requires_human_review = not fields_complete
+        event.confidence = "high" if fields_complete else "low"
+        evidence = dict(event.field_evidence or {})
+        evidence["manually_verified"] = True
+        evidence["combined_confidence"] = 1.0
+        evidence["manual_correction"] = {
+            "service_date": event.service_date.isoformat() if event.service_date else None,
+            "mileage_km": event.mileage_km,
+        }
+        for evidence_name in ("date", "mileage_km"):
+            if isinstance(evidence.get(evidence_name), dict):
+                corrected_value = (
+                    event.service_date.isoformat()
+                    if evidence_name == "date" and event.service_date
+                    else event.mileage_km
+                    if evidence_name == "mileage_km"
+                    else None
+                )
+                original_candidates = evidence[evidence_name].get("candidates", [])
+                candidates = [
+                    {**candidate, "selected": False}
+                    for candidate in original_candidates
+                    if isinstance(candidate, dict)
+                ]
+                candidates.append({
+                    "value": corrected_value,
+                    "rawText": str(corrected_value) if corrected_value is not None else None,
+                    "label": "Corrección manual",
+                    "page": event.source_page,
+                    "boundingBox": None,
+                    "score": 1.0,
+                    "reasons": ["Valor confirmado y guardado por una persona antes de revalidar."],
+                    "selected": True,
+                })
+                evidence[evidence_name] = {
+                    **evidence[evidence_name],
+                    "raw_value": str(corrected_value) if corrected_value is not None else None,
+                    "normalized_value": corrected_value,
+                    "manually_verified": True,
+                    "confidence": "high",
+                    "confidence_score": 1.0,
+                    "ambiguous": False,
+                    "candidates": candidates,
+                }
+        event.field_evidence = evidence
+        event.warnings = [] if fields_complete else ["La corrección manual todavía tiene campos incompletos."]
         db.commit()
         db.refresh(event)
     return ServiceEventRead.model_validate(event)

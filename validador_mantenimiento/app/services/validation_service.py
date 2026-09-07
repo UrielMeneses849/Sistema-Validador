@@ -28,6 +28,20 @@ STATUS_REJECTED = "RECHAZADO"
 STATUS_REVIEW_REQUIRED = "REVISION_REQUERIDA"
 
 
+def _semantic_validation_state(status: str, details: dict | None = None) -> str:
+    if details and details.get("validation_state"):
+        return str(details["validation_state"])
+    if status == "FIRST_MAINTENANCE_AVAILABLE":
+        return "no_previous_maintenance"
+    if status == "COMPLIANT":
+        return "compliant"
+    if status in {"EXCEEDED_MILEAGE", "EXCEEDED_TIME", "EXCEEDED_BOTH"}:
+        return "non_compliant"
+    if status == "INSUFFICIENT_DATA":
+        return "missing_current_data"
+    return "requires_review"
+
+
 def _validation_read(validation: Validation) -> ValidationRead:
     maintenance = validation.maintenance
     details = validation.analysis_details or {}
@@ -40,6 +54,7 @@ def _validation_read(validation: Validation) -> ValidationRead:
         document_id=validation.document_id,
         maintenance_id=validation.maintenance_id,
         status=validation.status,
+        validation_state=_semantic_validation_state(validation.status, details),
         document_date=validation.document_date,
         document_odometer=validation.document_odometer,
         last_maintenance_date=maintenance.maintenance_date if maintenance else previous.get("service_date"),
@@ -132,6 +147,27 @@ def _save_service_event_validation(
         if assessment.status == "COMPLIANT"
         else "not_compliant"
     )
+    evidence = event.field_evidence or {}
+
+    def trace_field(field_name: str) -> dict:
+        field = evidence.get(field_name) if isinstance(evidence.get(field_name), dict) else {}
+        candidates = field.get("candidates") if isinstance(field.get("candidates"), list) else []
+        selected = next((candidate for candidate in candidates if candidate.get("selected")), None)
+        if selected is None and candidates:
+            selected = candidates[0]
+        return {
+            "selected_value": field.get("normalized_value"),
+            "raw_text": field.get("raw_value"),
+            "label": selected.get("label") if selected else None,
+            "confidence": field.get("confidence"),
+            "confidence_score": field.get("confidence_score"),
+            "page": (selected.get("page") if selected else None) or field.get("source_page"),
+            "selection_reasons": selected.get("reasons", []) if selected else [],
+            "ambiguous": bool(field.get("ambiguous")),
+            "candidate_count": len(candidates),
+            "manually_verified": bool(field.get("manually_verified")),
+        }
+
     validation = Validation(
         validation_code=f"PENDING-{uuid4().hex}",
         vehicle_id=event.vehicle_id,
@@ -156,7 +192,17 @@ def _save_service_event_validation(
             "previous_maintenance": previous_payload,
             "delta_km": assessment.delta_km,
             "interval_validation": interval_validation,
+            "validation_state": assessment.validation_state,
             "extraction_method": event.extraction_method,
+            "extraction_trace": {
+                "method": event.extraction_method,
+                "confidence": event.confidence,
+                "warnings": event.warnings,
+                "fields": {
+                    "service_date": trace_field("date"),
+                    "actual_mileage": trace_field("mileage_km"),
+                },
+            },
         },
     )
     db.add(validation)

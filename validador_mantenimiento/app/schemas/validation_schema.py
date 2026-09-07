@@ -35,6 +35,7 @@ class ValidationRead(BaseModel):
     document_id: int
     maintenance_id: Optional[int]
     status: str
+    validation_state: str
     document_date: Optional[date]
     document_odometer: Optional[int]
     last_maintenance_date: Optional[date]

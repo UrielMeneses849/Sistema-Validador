@@ -37,13 +37,14 @@ app.mount("/js", StaticFiles(directory=FRONTEND_DIR / "js"), name="js")
 
 
 @app.get("/", include_in_schema=False)
-def dashboard_page() -> FileResponse:
+def maintenance_audit_page() -> FileResponse:
     return FileResponse(FRONTEND_DIR / "index.html")
 
 
 @app.get("/{page_name}.html", include_in_schema=False)
 def frontend_page(page_name: str) -> FileResponse:
     allowed_pages = {
+        "dashboard",
         "vehicles",
         "register_maintenance",
         "validate_document",

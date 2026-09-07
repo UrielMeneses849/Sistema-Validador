@@ -1,6 +1,17 @@
 from fastapi.testclient import TestClient
 
 
+def test_frontend_routes_keep_audit_and_dashboard_available(client: TestClient):
+    audit = client.get("/")
+    dashboard = client.get("/dashboard.html")
+
+    assert audit.status_code == 200
+    assert "Verifica el historial" in audit.text
+    assert "/js/audit.js" in audit.text
+    assert dashboard.status_code == 200
+    assert "Últimas validaciones" in dashboard.text
+
+
 def test_vehicle_crud_and_logical_deactivation(client: TestClient):
     created = client.post(
         "/api/vehicles",
@@ -43,4 +54,3 @@ def test_document_rejects_empty_or_unsupported_file(client: TestClient):
     )
     assert response.status_code == 422
     assert "vacío" in response.json()["detail"]
-

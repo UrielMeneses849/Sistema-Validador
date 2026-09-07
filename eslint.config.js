@@ -18,4 +18,15 @@ export default defineConfig([
       parserOptions: { ecmaFeatures: { jsx: true } },
     },
   },
+  {
+    files: ['validador_mantenimiento/frontend/js/*.js'],
+    languageOptions: {
+      globals: {
+        API: 'readonly',
+        UI: 'readonly',
+        resultMarkup: 'readonly',
+        MaintenanceAnalysisAPI: 'readonly',
+      },
+    },
+  },
 ])
