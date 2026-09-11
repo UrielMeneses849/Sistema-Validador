@@ -228,6 +228,20 @@ textarea { min-height: 84px; resize: vertical; } input:focus, select:focus, text
 }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; } }
 
+/* Captura local de vehículos */
+.vehicle-form-section { padding: 16px; border: 1px solid var(--line); border-radius: 9px; background: #fbfcfd; }
+.vehicle-form-section + .vehicle-form-section { margin-top: 16px; }
+.vehicle-form-section-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
+.vehicle-form-section-heading h3 { margin: 0; color: #26354a; font-size: 13px; }
+.vehicle-form-section-heading p { margin: 4px 0 0; color: var(--muted); font-size: 11px; line-height: 1.45; }
+#numero_contrato[readonly] { color: #475467; background: #f2f4f7; cursor: not-allowed; }
+.filter-bar.vehicle-local-filter { grid-template-columns: minmax(0, 1fr) auto; }
+
+@media (max-width: 800px) {
+  .filter-bar.vehicle-local-filter { grid-template-columns: minmax(0, 1fr) auto; }
+  .filter-bar.vehicle-local-filter .field:first-child { grid-column: auto; }
+}
+
 /* InteliDrive design system */
 :root {
   --sidebar: #101a23;

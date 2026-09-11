@@ -50,7 +50,11 @@ def _validation_read(validation: Validation) -> ValidationRead:
         id=validation.id,
         validation_code=validation.validation_code,
         vehicle_id=validation.vehicle_id,
-        vehicle_internal_number=validation.vehicle.internal_number if validation.vehicle else None,
+        vehicle_internal_number=(
+            validation.vehicle.numero_contrato or validation.vehicle.internal_number
+            if validation.vehicle
+            else None
+        ),
         document_id=validation.document_id,
         maintenance_id=validation.maintenance_id,
         status=validation.status,
@@ -439,7 +443,11 @@ def _validation_read_base(validation: Validation) -> ValidationRead:
         id=validation.id,
         validation_code=validation.validation_code,
         vehicle_id=validation.vehicle_id,
-        vehicle_internal_number=validation.vehicle.internal_number if validation.vehicle else None,
+        vehicle_internal_number=(
+            validation.vehicle.numero_contrato or validation.vehicle.internal_number
+            if validation.vehicle
+            else None
+        ),
         document_id=validation.document_id,
         maintenance_id=validation.maintenance_id,
         status=validation.status,

@@ -6,13 +6,17 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.database.database import get_db
-from app.schemas.vehicle_schema import VehicleCreate, VehicleRead, VehicleUpdate
+from app.schemas.vehicle_schema import NextContractRead, VehicleCreate, VehicleRead, VehicleUpdate
 from app.services.vehicle_service import (
+    ContractDateRangeError,
+    ContractNumberImmutableError,
+    ContractNumberUnavailableError,
     DuplicateInternalNumberError,
     VehicleNotFoundError,
     create_vehicle,
     deactivate_vehicle,
     get_vehicle_or_raise,
+    get_next_contract_number,
     list_vehicles,
     update_vehicle,
 )
@@ -29,6 +33,8 @@ def _not_found(error: VehicleNotFoundError) -> HTTPException:
 def create(payload: VehicleCreate, db: Session = Depends(get_db)) -> VehicleRead:
     try:
         return create_vehicle(db, payload)
+    except ContractNumberUnavailableError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     except DuplicateInternalNumberError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
 
@@ -40,6 +46,15 @@ def get_all(
     db: Session = Depends(get_db),
 ) -> list[VehicleRead]:
     return list_vehicles(db, search=search, status=status_filter)
+
+
+@router.get("/next-contract", response_model=NextContractRead)
+def get_next_contract(db: Session = Depends(get_db)) -> NextContractRead:
+    """Previsualiza el consecutivo; POST sigue siendo quien lo asigna."""
+    try:
+        return NextContractRead(numero_contrato=get_next_contract_number(db))
+    except ContractNumberUnavailableError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
 
 
 @router.get("/{vehicle_id}", response_model=VehicleRead)
@@ -56,6 +71,8 @@ def update(vehicle_id: int, payload: VehicleUpdate, db: Session = Depends(get_db
         return update_vehicle(db, vehicle_id, payload)
     except VehicleNotFoundError as exc:
         raise _not_found(exc) from exc
+    except (ContractNumberImmutableError, ContractDateRangeError) as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
     except DuplicateInternalNumberError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
 
@@ -67,4 +84,3 @@ def deactivate(vehicle_id: int, db: Session = Depends(get_db)) -> VehicleRead:
         return deactivate_vehicle(db, vehicle_id)
     except VehicleNotFoundError as exc:
         raise _not_found(exc) from exc
-
