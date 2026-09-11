@@ -37,7 +37,13 @@ En la primera ejecución se crea automáticamente `data/validator.db` y la carpe
 
 ## OCR local con Tesseract
 
-El paquete Python `pytesseract` no incluye el ejecutable del motor. En macOS con Homebrew, instala manualmente el motor y los idiomas adicionales:
+El paquete Python `pytesseract` no incluye el ejecutable del motor. En Windows puede instalarse con Winget:
+
+```powershell
+winget install --id tesseract-ocr.tesseract --exact
+```
+
+En macOS con Homebrew, instala manualmente el motor y los idiomas adicionales:
 
 ```bash
 brew install tesseract
@@ -54,6 +60,7 @@ Configuración opcional exclusivamente del servidor:
 | `OCR_PROVIDER` | `tesseract` | Proveedor visual activo. |
 | `OCR_LANG` | `spa+eng` | Idiomas enviados a Tesseract. |
 | `TESSERACT_CMD` | autodetección | Ruta opcional al ejecutable. |
+| `TESSDATA_DIR` | `data/tessdata` | Carpeta opcional con los modelos `.traineddata`. |
 | `OCR_REVIEW_THRESHOLD` | `0.88` | Umbral de revisión por campo. |
 | `OCR_MAX_FILE_SIZE_MB` | `10` | Tamaño máximo por imagen. |
 | `OCR_MAX_IMAGES_PER_ANALYSIS` | `15` | Límite coordinado con la UI. |
@@ -68,7 +75,7 @@ La portada permite procesar hasta 15 imágenes con dos solicitudes concurrentes.
 3. El sistema extrae primero el texto digital del PDF, clasifica el documento y detecta los eventos de servicio.
 4. La pantalla muestra los valores detectados y registra el resultado automáticamente. Puedes editar los campos y presionar **Guardar correcciones y revalidar**.
 
-Para una imagen, `HybridExtractor` delega en `VisionExtractor` y el proveedor Tesseract configurado. Los PDF escaneados aún no se rasterizan en esta fase y conservan la corrección manual como fallback.
+Para una imagen, `HybridExtractor` delega en `VisionExtractor` y el proveedor Tesseract configurado. Los PDF escaneados se rasterizan localmente con `pypdfium2` antes de pasar por OCR.
 
 ## Flujo de uso
 

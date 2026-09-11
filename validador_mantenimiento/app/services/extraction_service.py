@@ -1,13 +1,14 @@
 from __future__ import annotations
 
-import shutil
+import os
 import re
+import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Protocol
 
-from app.core.config import OCR_LANG, OCR_PROVIDER, OCR_REVIEW_THRESHOLD, TESSERACT_CMD
+from app.core.config import OCR_LANG, OCR_PROVIDER, OCR_REVIEW_THRESHOLD, TESSDATA_DIR, TESSERACT_CMD
 from app.services.image_preprocessing import ImageValidationError, preprocess_image
 
 
@@ -66,7 +67,7 @@ class PdfTextExtractor:
 
     def extract(self, file_path: str, mime_type: str) -> ExtractionResult:
         if mime_type != "application/pdf" and Path(file_path).suffix.lower() != ".pdf":
-            return ExtractionResult(method="native_pdf", warnings=["El archivo no es un PDF."])
+            return ExtractionResult(method="pdf_text", warnings=["El archivo no es un PDF."])
         try:
             import pdfplumber
 
@@ -92,7 +93,7 @@ class PdfTextExtractor:
                             )
                         )
         except Exception as exc:  # Un PDF malformado no debe impedir guardar el original.
-            return ExtractionResult(method="native_pdf", warnings=[f"No fue posible leer el PDF: {exc}"])
+            return ExtractionResult(method="pdf_text", warnings=[f"No fue posible leer el PDF: {exc}"])
 
         text = "\n".join(page.text for page in pages)
         usable_characters = sum(character.isalnum() for character in text)
@@ -130,7 +131,7 @@ class PdfTextExtractor:
         }
         if not useful:
             return ExtractionResult(
-                method="native_pdf",
+                method="pdf_text",
                 pages=pages,
                 words=words,
                 warnings=[
@@ -139,7 +140,7 @@ class PdfTextExtractor:
                 metadata=metadata,
             )
         return ExtractionResult(
-            method="native_pdf",
+            method="pdf_text",
             pages=pages,
             words=words,
             has_usable_text=True,
@@ -157,12 +158,40 @@ class OcrExtractor:
         *,
         language: str = OCR_LANG,
         tesseract_cmd: str | None = TESSERACT_CMD,
+        tessdata_dir: str | Path | None = TESSDATA_DIR,
     ) -> None:
         self.language = language
         self.tesseract_cmd = tesseract_cmd
+        self.tessdata_dir = Path(tessdata_dir) if tessdata_dir else None
+
+    def _find_executable(self) -> str | None:
+        """Encuentra Tesseract aunque Windows aún no haya actualizado PATH."""
+        configured = shutil.which(self.tesseract_cmd) if self.tesseract_cmd else None
+        if configured:
+            return configured
+
+        on_path = shutil.which("tesseract")
+        if on_path:
+            return on_path
+
+        if os.name != "nt":
+            return None
+
+        candidates = []
+        for variable in ("ProgramFiles", "ProgramFiles(x86)"):
+            root = os.environ.get(variable)
+            if root:
+                candidates.append(Path(root) / "Tesseract-OCR" / "tesseract.exe")
+        local_app_data = os.environ.get("LOCALAPPDATA")
+        if local_app_data:
+            candidates.append(Path(local_app_data) / "Programs" / "Tesseract-OCR" / "tesseract.exe")
+        return next((str(candidate) for candidate in candidates if candidate.is_file()), None)
+
+    def _runtime_config(self) -> str:
+        return self.tesseract_config
 
     def _load_engine(self):
-        executable = shutil.which(self.tesseract_cmd or "tesseract")
+        executable = self._find_executable()
         if not executable:
             raise OcrUnavailableError(
                 "Tesseract OCR no está disponible. Instala Tesseract con los idiomas "
@@ -175,6 +204,8 @@ class OcrExtractor:
                 "Falta el paquete Python pytesseract. Instala las dependencias de requirements.txt."
             ) from exc
         pytesseract.pytesseract.tesseract_cmd = executable
+        if self.tessdata_dir and self.tessdata_dir.is_dir():
+            os.environ["TESSDATA_PREFIX"] = str(self.tessdata_dir.resolve())
         return pytesseract
 
     @staticmethod
@@ -222,6 +253,7 @@ class OcrExtractor:
                 configuration=self.tesseract_config,
             )
         pytesseract = self._load_engine()
+        runtime_config = self._runtime_config()
         try:
             with TemporaryDirectory(prefix="maintenance-ocr-") as temporary_directory:
                 sources: list[Path] = []
@@ -253,7 +285,7 @@ class OcrExtractor:
                     data = pytesseract.image_to_data(
                         str(prepared_path),
                         lang=self.language,
-                        config=self.tesseract_config,
+                        config=runtime_config,
                         output_type=pytesseract.Output.DICT,
                     )
                     data["page_num"] = [page_number] * len(data.get("text", []))
@@ -290,11 +322,11 @@ class OcrExtractor:
             has_usable_text=usable_characters >= 8,
             warnings=warnings,
             language=self.language,
-            configuration=self.tesseract_config,
+            configuration=runtime_config,
             metadata={
                 "provider": "tesseract",
                 "language": self.language,
-                "configuration": self.tesseract_config,
+                "configuration": runtime_config,
                 "token_count": len(words),
                 "average_token_confidence": round(average_confidence, 4),
             },

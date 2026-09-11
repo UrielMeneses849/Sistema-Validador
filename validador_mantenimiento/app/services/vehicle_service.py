@@ -116,11 +116,10 @@ def _contract_vehicle_values(payload: VehicleCreate, contract_number: str) -> di
             # legibilidad en las pantallas heredadas que usaban internal_number.
             "numero_contrato": contract_number,
             "internal_number": contract_number,
-            # Estas columnas siguen existiendo en SQLite por compatibilidad con
-            # registros previos. Sus valores se derivan en servidor y no forman
-            # parte de la captura manual actual.
-            "plate": f"CONTRATO-{contract_number}",
-            "year": payload.fecha_factura_origen.year,
+            # Estos campos legacy permanecen vacíos porque ya no forman parte
+            # del formulario actual. SQLite los conserva sólo por compatibilidad.
+            "plate": None,
+            "year": None,
             "vin": None,
             "current_odometer": payload.kilometraje,
             "kilometraje": payload.kilometraje,

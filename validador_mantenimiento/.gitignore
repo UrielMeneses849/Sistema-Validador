@@ -3,6 +3,7 @@ __pycache__/
 .venv/
 .env
 data/*.db
+data/tessdata/
 storage/documents/*
 !storage/documents/.gitkeep
 .pytest_cache/

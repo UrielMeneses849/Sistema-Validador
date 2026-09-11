@@ -43,7 +43,11 @@ const UI = {
   clearNotice(element) { element.textContent = ""; element.className = "notice" },
   async vehicleOptions(select, includeInactive = false) {
     const vehicles = await API.get(`/vehicles${includeInactive ? "" : "?status=active"}`)
-    select.innerHTML = `<option value="">Selecciona un vehículo</option>${vehicles.map((v) => `<option value="${v.id}">${this.escape(v.internal_number)} · ${this.escape(v.plate)} · ${this.escape(v.brand)} ${this.escape(v.model)}</option>`).join("")}`
+    select.innerHTML = `<option value="">Selecciona un vehículo</option>${vehicles.map((v) => {
+      const identifier = v.numero_contrato || v.internal_number || `Vehículo #${v.id}`
+      const plate = v.plate ? ` · ${this.escape(v.plate)}` : ""
+      return `<option value="${v.id}">${this.escape(identifier)}${plate} · ${this.escape(v.brand)} ${this.escape(v.model)}</option>`
+    }).join("")}`
     return vehicles
   },
 }

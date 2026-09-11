@@ -12,6 +12,13 @@ def test_frontend_routes_keep_audit_and_dashboard_available(client: TestClient):
     assert "Últimas validaciones" in dashboard.text
 
 
+def test_vehicles_page_loads_api_client_before_page_logic(client: TestClient):
+    response = client.get("/vehicles.html")
+
+    assert response.status_code == 200
+    assert response.text.index('/js/api.js') < response.text.index('/js/vehicles.js')
+
+
 def test_vehicle_crud_and_logical_deactivation(client: TestClient):
     created = client.post(
         "/api/vehicles",

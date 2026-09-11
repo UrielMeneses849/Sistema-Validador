@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import os
 import sys
+import tempfile
 from pathlib import Path
 
 # Debe establecerse antes de importar la aplicación, que crea el engine.
-os.environ["DATABASE_URL"] = "sqlite:////private/tmp/validador_mantenimiento_tests.db"
+TEST_DATABASE = Path(tempfile.gettempdir()) / "validador_mantenimiento_tests.db"
+os.environ["DATABASE_URL"] = f"sqlite:///{TEST_DATABASE.as_posix()}"
 PROJECT_DIR = Path(__file__).resolve().parents[1]
 if str(PROJECT_DIR) not in sys.path:
     sys.path.insert(0, str(PROJECT_DIR))
