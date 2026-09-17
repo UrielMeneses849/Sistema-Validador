@@ -50,6 +50,9 @@ def create_vehicle(db: Session) -> Vehicle:
         model="Captiva",
         year=2024,
         current_odometer=0,
+        vehicle_condition="used",
+        initial_odometer=0,
+        fecha_inicio_contrato=date(2024, 1, 1),
     )
     db.add(vehicle)
     db.commit()
@@ -64,7 +67,9 @@ def test_required_timeline_cases(client, monkeypatch):
     with SessionLocal() as db:
         vehicle = create_vehicle(db)
         first = create_event(db, vehicle, date(2024, 3, 23), 6399)
-        assert assess_service_event(db, first).status == "FIRST_MAINTENANCE_AVAILABLE"
+        first_assessment = assess_service_event(db, first)
+        assert first_assessment.status == "COMPLIANT"
+        assert first_assessment.service_sequence == "first"
 
         compliant = create_event(db, vehicle, date(2024, 8, 20), 15500)
         assessment = assess_service_event(db, compliant)
@@ -78,7 +83,7 @@ def test_exceeded_mileage_time_and_regressive_cases(client):
     with SessionLocal() as db:
         vehicle = create_vehicle(db)
         create_event(db, vehicle, date(2024, 1, 10), 6399)
-        mileage = create_event(db, vehicle, date(2024, 5, 20), 17000)
+        mileage = create_event(db, vehicle, date(2024, 5, 20), 17400)
         assert assess_service_event(db, mileage).status == "EXCEEDED_MILEAGE"
 
         vehicle_time = Vehicle(
@@ -88,12 +93,15 @@ def test_exceeded_mileage_time_and_regressive_cases(client):
             model="Transit",
             year=2024,
             current_odometer=0,
+            vehicle_condition="used",
+            initial_odometer=0,
+            fecha_inicio_contrato=date(2024, 1, 1),
         )
         db.add(vehicle_time)
         db.commit()
         db.refresh(vehicle_time)
         create_event(db, vehicle_time, date(2024, 1, 10), 10000)
-        late = create_event(db, vehicle_time, date(2024, 7, 11), 15000)
+        late = create_event(db, vehicle_time, date(2024, 8, 11), 15000)
         assert assess_service_event(db, late).status == "EXCEEDED_TIME"
 
         vehicle_reverse = Vehicle(
@@ -103,6 +111,9 @@ def test_exceeded_mileage_time_and_regressive_cases(client):
             model="Rio",
             year=2024,
             current_odometer=0,
+            vehicle_condition="used",
+            initial_odometer=0,
+            fecha_inicio_contrato=date(2024, 1, 1),
         )
         db.add(vehicle_reverse)
         db.commit()

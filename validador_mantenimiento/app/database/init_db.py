@@ -1,7 +1,16 @@
 from sqlalchemy import inspect
 
 from app.database.database import Base, engine
-from app.models import audit_log, document, document_analysis, maintenance, service_event, validation, vehicle  # noqa: F401
+from app.models import (  # noqa: F401
+    audit_log,
+    document,
+    document_analysis,
+    manufacturer_maintenance_rule,
+    maintenance,
+    service_event,
+    validation,
+    vehicle,
+)
 
 
 def init_db() -> None:
@@ -19,6 +28,26 @@ def _apply_sqlite_compatibility_migrations() -> None:
             connection.exec_driver_sql("ALTER TABLE validations ADD COLUMN analysis_details JSON")
 
     _migrate_sqlite_vehicles()
+    _add_val002_columns()
+
+
+def _add_val002_columns() -> None:
+    """Agrega campos de VAL-002 sin inferir datos históricos ni borrar registros."""
+    vehicle_columns = {column["name"] for column in inspect(engine).get_columns("vehicles")}
+    maintenance_columns = {column["name"] for column in inspect(engine).get_columns("maintenances")}
+    with engine.begin() as connection:
+        if "vehicle_condition" not in vehicle_columns:
+            connection.exec_driver_sql(
+                "ALTER TABLE vehicles ADD COLUMN vehicle_condition VARCHAR(20) "
+                "NOT NULL DEFAULT 'unknown'"
+            )
+        if "initial_odometer" not in vehicle_columns:
+            connection.exec_driver_sql("ALTER TABLE vehicles ADD COLUMN initial_odometer INTEGER")
+        if "resets_maintenance_interval" not in maintenance_columns:
+            connection.exec_driver_sql(
+                "ALTER TABLE maintenances ADD COLUMN resets_maintenance_interval BOOLEAN "
+                "NOT NULL DEFAULT 1"
+            )
 
 
 _VEHICLE_NEW_COLUMNS = {

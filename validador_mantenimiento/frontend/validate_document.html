@@ -1,4 +1,100 @@
 <!doctype html>
-<html lang="es-MX"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Validar documento · InteliDrive</title><link rel="stylesheet" href="/css/styles.css"></head>
-<body><div class="app-shell"><aside class="sidebar"><a class="brand" href="/"><span class="brand-mark">ID</span><span><strong>InteliDrive</strong><small>Vehicle Intelligence</small></span></a><p class="nav-label">OPERACIÓN</p><nav><ul class="nav-list"><li><a href="/"><span class="nav-icon">⌕</span>Auditoría historial</a></li><li><a href="/dashboard.html"><span class="nav-icon">▦</span>Dashboard</a></li><li><a href="/vehicles.html"><span class="nav-icon">▤</span>Vehículos</a></li><li><a href="/register_maintenance.html"><span class="nav-icon">◷</span>Últimos mantenimientos</a></li><li><a class="active" href="/validate_document.html"><span class="nav-icon">⌁</span>Validar documento</a></li><li><a href="/history.html"><span class="nav-icon">☷</span>Historial</a></li></ul></nav><div class="side-footer"><span>Powered by</span><strong>NEXVORA</strong></div></aside>
-<main class="page"><header class="page-header"><div><p class="eyebrow">Análisis automático</p><h1>Validar documento de mantenimiento</h1><p class="subtitle">Sube el archivo original: los datos se extraen y validan automáticamente. Puedes corregirlos antes de revalidar si hace falta.</p></div></header><section class="card"><div id="validation-notice" class="notice"></div><form id="validation-form"><div class="form-grid"><div class="field full"><label for="validation-vehicle">1. Vehículo <span class="required">*</span></label><select id="validation-vehicle" name="vehicle_id" required><option>Cargando vehículos…</option></select></div><div class="field full"><label>2. Documento <span class="required">*</span></label><label class="upload-zone" for="document-file"><input id="document-file" name="document" type="file" required accept=".pdf,.jpg,.jpeg,.png,.webp,application/pdf,image/jpeg,image/png,image/webp"><span class="upload-icon">⇧</span><strong id="file-name">Selecciona un PDF, JPG, JPEG, PNG o WEBP</strong><small>El archivo original se conserva sin modificaciones.</small></label></div></div><div id="analysis-summary" class="analysis-summary hidden"></div><div class="form-grid correction-fields"><div class="field"><label for="document-date">Fecha del documento <small>Se detecta automáticamente</small></label><input id="document-date" name="document_date" type="date"></div><div class="field"><label for="document-odometer">Odómetro del documento <small>Se detecta automáticamente</small></label><input id="document-odometer" name="document_odometer" type="number" placeholder="50000"></div><div class="field"><label for="document-type">Tipo de mantenimiento</label><input id="document-type" name="maintenance_type" maxlength="120" placeholder="Mantenimiento preventivo"></div><div class="field"><label for="provider-name">Taller o proveedor</label><input id="provider-name" name="provider_name" maxlength="160" placeholder="Opcional"></div><div class="field"><label for="invoice-number">Factura o folio</label><input id="invoice-number" name="invoice_number" maxlength="120" placeholder="Opcional"></div><div class="field full"><label for="service-description">Descripción del servicio</label><textarea id="service-description" name="service_description" maxlength="3000" placeholder="Servicios reportados en el documento"></textarea></div></div><div class="form-actions"><button class="button button-primary" type="submit" id="validate-button">✦ ANALIZAR Y VALIDAR DOCUMENTO</button></div></form></section><section id="instant-result" class="hidden"></section></main></div><script src="/js/api.js"></script><script src="/js/validation.js"></script></body></html>
+<html lang="es-MX">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Auditoría de historial · InteliDrive</title>
+  <link rel="stylesheet" href="/css/styles.css">
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <a class="brand" href="/"><span class="brand-mark">ID</span><span><strong>InteliDrive</strong><small>Vehicle Intelligence</small></span></a>
+      <p class="nav-label">OPERACIÓN</p>
+      <nav><ul class="nav-list">
+        <li><a href="/"><span class="nav-icon">⌕</span>Auditoría historial</a></li>
+        <li><a href="/dashboard.html"><span class="nav-icon">▦</span>Dashboard</a></li>
+        <li><a href="/vehicles.html"><span class="nav-icon">▤</span>Vehículos</a></li>
+        <li><a href="/manufacturer_rules.html"><span class="nav-icon">⚙</span>Reglas de fabricantes</a></li>
+        <li><a href="/register_maintenance.html"><span class="nav-icon">◷</span>Últimos mantenimientos</a></li>
+        <li><a class="active" href="/validate_document.html"><span class="nav-icon">⌁</span>Validar documento</a></li>
+        <li><a href="/history.html"><span class="nav-icon">☷</span>Historial</a></li>
+      </ul></nav>
+      <div class="side-footer"><span>Powered by</span><strong>NEXVORA</strong></div>
+    </aside>
+
+    <main class="page history-validation-page">
+      <header class="page-header">
+        <div>
+          <p class="eyebrow">Auditoría integral</p>
+          <h1>Historial de mantenimientos</h1>
+          <p class="subtitle">Carga todos los comprobantes de un vehículo. InteliDrive reconstruirá la secuencia cronológica y aplicará la política correspondiente como una sola auditoría.</p>
+        </div>
+      </header>
+
+      <section class="card history-upload-card">
+        <div class="card-header">
+          <div>
+            <h2 class="card-title">Documentos del vehículo</h2>
+            <p class="card-subtitle">Puedes seleccionar o arrastrar varios PDF y agregar más antes de analizar.</p>
+          </div>
+          <span class="history-step">1 · Preparar historial</span>
+        </div>
+        <div id="validation-notice" class="notice" role="status" aria-live="polite"></div>
+        <form id="validation-form">
+          <div class="field history-vehicle-selector">
+            <label for="validation-vehicle">Vehículo <span class="required">*</span></label>
+            <select id="validation-vehicle" name="vehicle_id" required><option value="">Cargando vehículos…</option></select>
+          </div>
+
+          <div id="history-dropzone" class="history-dropzone">
+            <input id="document-files" class="visually-hidden" name="documents" type="file" accept=".pdf,application/pdf" multiple>
+            <label for="document-files" class="history-dropzone-trigger">
+              <span class="upload-icon" aria-hidden="true">⇧</span>
+              <strong>Arrastra tus PDF aquí</strong>
+              <span>o haz clic para seleccionar varios documentos</span>
+              <small>Se conserva el límite configurado por archivo.</small>
+            </label>
+          </div>
+
+          <div id="selected-documents" class="history-file-list empty-history-files">Aún no has seleccionado documentos.</div>
+
+          <div id="history-progress" class="history-progress hidden" aria-live="polite">
+            <div><strong id="history-progress-label">Preparando análisis…</strong><span id="history-progress-count"></span></div>
+            <progress id="history-progress-bar" max="1" value="0"></progress>
+          </div>
+
+          <div class="form-actions history-upload-actions">
+            <label for="document-files" class="button button-secondary">＋ Agregar documentos</label>
+            <button class="button button-primary" type="submit" id="validate-button" disabled>✦ Analizar historial completo</button>
+          </div>
+        </form>
+      </section>
+
+      <section id="history-result" class="history-result hidden" aria-live="polite">
+        <div class="history-result-heading">
+          <div>
+            <p class="eyebrow">Línea temporal consolidada</p>
+            <h2>Resultado del historial</h2>
+            <p id="history-policy-label" class="subtitle"></p>
+          </div>
+          <span class="history-step">2 · Revisar secuencia</span>
+        </div>
+
+        <div class="card history-table-card">
+          <div class="table-wrap">
+            <table class="data-table history-timeline-table">
+              <thead><tr><th>Fecha</th><th>Kilometraje</th><th>Tiempo desde anterior</th><th>Km desde anterior</th><th>Resultado</th><th>Documento</th></tr></thead>
+              <tbody id="history-timeline-body"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <section id="history-summary" class="card history-summary"></section>
+      </section>
+    </main>
+  </div>
+  <script src="/js/api.js"></script>
+  <script src="/js/validation.js?v=history-v1"></script>
+</body>
+</html>

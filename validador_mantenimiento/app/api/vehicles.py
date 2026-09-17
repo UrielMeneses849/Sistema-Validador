@@ -12,9 +12,12 @@ from app.services.vehicle_service import (
     ContractNumberImmutableError,
     ContractNumberUnavailableError,
     DuplicateInternalNumberError,
+    InitialOdometerImmutableError,
+    VehicleBusinessDataError,
+    VehicleHasHistoryError,
     VehicleNotFoundError,
     create_vehicle,
-    deactivate_vehicle,
+    delete_vehicle,
     get_vehicle_or_raise,
     get_next_contract_number,
     list_vehicles,
@@ -71,16 +74,23 @@ def update(vehicle_id: int, payload: VehicleUpdate, db: Session = Depends(get_db
         return update_vehicle(db, vehicle_id, payload)
     except VehicleNotFoundError as exc:
         raise _not_found(exc) from exc
-    except (ContractNumberImmutableError, ContractDateRangeError) as exc:
+    except (
+        ContractNumberImmutableError,
+        ContractDateRangeError,
+        InitialOdometerImmutableError,
+        VehicleBusinessDataError,
+    ) as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
     except DuplicateInternalNumberError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
 
 
-@router.delete("/{vehicle_id}", response_model=VehicleRead)
-def deactivate(vehicle_id: int, db: Session = Depends(get_db)) -> VehicleRead:
-    """Baja lógica: conserva documentos, mantenimientos y validaciones."""
+@router.delete("/{vehicle_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete(vehicle_id: int, db: Session = Depends(get_db)) -> None:
+    """Elimina únicamente vehículos que no tienen historial relacionado."""
     try:
-        return deactivate_vehicle(db, vehicle_id)
+        delete_vehicle(db, vehicle_id)
     except VehicleNotFoundError as exc:
         raise _not_found(exc) from exc
+    except VehicleHasHistoryError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc

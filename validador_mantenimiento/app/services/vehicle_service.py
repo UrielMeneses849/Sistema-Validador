@@ -3,10 +3,16 @@ from __future__ import annotations
 import re
 from typing import Optional
 
-from sqlalchemy import Select, or_, select
+from sqlalchemy import Select, exists, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.models.audit_log import AuditLog
+from app.models.document import Document
+from app.models.document_analysis import DocumentAnalysis
+from app.models.maintenance import Maintenance
+from app.models.service_event import ServiceEvent
+from app.models.validation import Validation
 from app.models.vehicle import Vehicle
 from app.schemas.vehicle_schema import VehicleCreate, VehicleUpdate
 
@@ -29,6 +35,24 @@ class ContractNumberImmutableError(Exception):
 
 class ContractDateRangeError(Exception):
     pass
+
+
+class InitialOdometerImmutableError(Exception):
+    pass
+
+
+class VehicleBusinessDataError(Exception):
+    pass
+
+
+class VehicleHasHistoryError(Exception):
+    pass
+
+
+VEHICLE_HISTORY_CONFLICT_MESSAGE = (
+    "No se puede eliminar este vehículo porque tiene mantenimientos, documentos "
+    "o validaciones asociados. Su historial debe conservarse para trazabilidad."
+)
 
 
 INITIAL_CONTRACT_NUMBER = 835414
@@ -189,6 +213,20 @@ def update_vehicle(db: Session, vehicle_id: int, payload: VehicleUpdate) -> Vehi
         # formulario vigente y por los listados.
         values["kilometraje"] = values["current_odometer"]
 
+    if "initial_odometer" in values and vehicle.initial_odometer is not None:
+        if values["initial_odometer"] != vehicle.initial_odometer:
+            raise InitialOdometerImmutableError(
+                "El kilometraje al inicio del contrato no se puede modificar."
+            )
+        values.pop("initial_odometer")
+
+    target_condition = values.get("vehicle_condition", vehicle.vehicle_condition)
+    target_initial_odometer = values.get("initial_odometer", vehicle.initial_odometer)
+    if target_condition in {"new", "used"} and target_initial_odometer is None:
+        raise VehicleBusinessDataError(
+            "El kilometraje al inicio del contrato es obligatorio para Nuevo (M1) y Seminuevo (M2)."
+        )
+
     start_date = values.get("fecha_inicio_contrato", vehicle.fecha_inicio_contrato)
     end_date = values.get("fecha_fin_contrato", vehicle.fecha_fin_contrato)
     if start_date is not None and end_date is not None and end_date < start_date:
@@ -205,9 +243,39 @@ def update_vehicle(db: Session, vehicle_id: int, payload: VehicleUpdate) -> Vehi
     return vehicle
 
 
-def deactivate_vehicle(db: Session, vehicle_id: int) -> Vehicle:
+def _vehicle_has_related_history(db: Session, vehicle_id: int) -> bool:
+    """Revisa relaciones directas y transitivas sin cargar ni borrar el historial."""
+    checks = (
+        select(exists().where(Maintenance.vehicle_id == vehicle_id)),
+        select(exists().where(Document.vehicle_id == vehicle_id)),
+        select(exists().where(ServiceEvent.vehicle_id == vehicle_id)),
+        select(exists().where(Validation.vehicle_id == vehicle_id)),
+        select(
+            exists().where(
+                DocumentAnalysis.document_id == Document.id,
+                Document.vehicle_id == vehicle_id,
+            )
+        ),
+        select(
+            exists().where(
+                AuditLog.validation_id == Validation.id,
+                Validation.vehicle_id == vehicle_id,
+            )
+        ),
+    )
+    return any(bool(db.scalar(check)) for check in checks)
+
+
+def delete_vehicle(db: Session, vehicle_id: int) -> None:
     vehicle = get_vehicle_or_raise(db, vehicle_id)
-    vehicle.status = "inactive"
-    db.commit()
-    db.refresh(vehicle)
-    return vehicle
+    if _vehicle_has_related_history(db, vehicle_id):
+        raise VehicleHasHistoryError(VEHICLE_HISTORY_CONFLICT_MESSAGE)
+
+    db.delete(vehicle)
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        # Protección adicional si en el futuro se agrega una relación que aún
+        # no forme parte de las comprobaciones explícitas anteriores.
+        raise VehicleHasHistoryError(VEHICLE_HISTORY_CONFLICT_MESSAGE) from exc

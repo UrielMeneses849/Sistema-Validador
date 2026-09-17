@@ -25,6 +25,8 @@ class VehicleCreate(BaseModel):
     fecha_factura_origen: Optional[date] = None
     fecha_inicio_contrato: Optional[date] = None
     fecha_fin_contrato: Optional[date] = None
+    vehicle_condition: Literal["new", "used", "unknown"] = "unknown"
+    initial_odometer: Optional[int] = Field(default=None, ge=0)
 
     @field_validator("internal_number", "plate", "brand", "model", mode="before")
     @classmethod
@@ -78,6 +80,8 @@ class VehicleCreate(BaseModel):
             missing = [name for name, value in legacy_fields.items() if value is None]
             if missing:
                 raise ValueError(f"Faltan campos obligatorios del vehículo: {', '.join(missing)}.")
+        if self.vehicle_condition in {"new", "used"} and self.initial_odometer is None:
+            raise ValueError("El kilometraje al inicio del contrato es obligatorio.")
         return self
 
 
@@ -95,6 +99,8 @@ class VehicleUpdate(BaseModel):
     fecha_factura_origen: Optional[date] = None
     fecha_inicio_contrato: Optional[date] = None
     fecha_fin_contrato: Optional[date] = None
+    vehicle_condition: Optional[Literal["new", "used", "unknown"]] = None
+    initial_odometer: Optional[int] = Field(default=None, ge=0)
 
     @field_validator("internal_number", "plate", "brand", "model", mode="before")
     @classmethod
@@ -142,6 +148,8 @@ class VehicleRead(BaseModel):
     fecha_factura_origen: Optional[date]
     fecha_inicio_contrato: Optional[date]
     fecha_fin_contrato: Optional[date]
+    vehicle_condition: Literal["new", "used", "unknown"]
+    initial_odometer: Optional[int]
     created_at: datetime
     updated_at: datetime
 

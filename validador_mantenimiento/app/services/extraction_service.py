@@ -66,7 +66,7 @@ class PdfTextExtractor:
 
     def extract(self, file_path: str, mime_type: str) -> ExtractionResult:
         if mime_type != "application/pdf" and Path(file_path).suffix.lower() != ".pdf":
-            return ExtractionResult(method="native_pdf", warnings=["El archivo no es un PDF."])
+            return ExtractionResult(method="pdf_text", warnings=["El archivo no es un PDF."])
         try:
             import pdfplumber
 
@@ -92,7 +92,7 @@ class PdfTextExtractor:
                             )
                         )
         except Exception as exc:  # Un PDF malformado no debe impedir guardar el original.
-            return ExtractionResult(method="native_pdf", warnings=[f"No fue posible leer el PDF: {exc}"])
+            return ExtractionResult(method="pdf_text", warnings=[f"No fue posible leer el PDF: {exc}"])
 
         text = "\n".join(page.text for page in pages)
         usable_characters = sum(character.isalnum() for character in text)
@@ -130,7 +130,7 @@ class PdfTextExtractor:
         }
         if not useful:
             return ExtractionResult(
-                method="native_pdf",
+                method="pdf_text",
                 pages=pages,
                 words=words,
                 warnings=[
@@ -139,7 +139,7 @@ class PdfTextExtractor:
                 metadata=metadata,
             )
         return ExtractionResult(
-            method="native_pdf",
+            method="pdf_text",
             pages=pages,
             words=words,
             has_usable_text=True,

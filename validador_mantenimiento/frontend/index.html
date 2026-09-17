@@ -16,6 +16,7 @@
       <li><a class="active" href="/"><span class="nav-icon" aria-hidden="true">⌕</span>Auditoría historial</a></li>
       <li><a href="/dashboard.html"><span class="nav-icon" aria-hidden="true">▦</span>Dashboard</a></li>
       <li><a href="/vehicles.html"><span class="nav-icon" aria-hidden="true">▤</span>Vehículos</a></li>
+      <li><a href="/manufacturer_rules.html"><span class="nav-icon" aria-hidden="true">⚙</span>Reglas de fabricantes</a></li>
       <li><a href="/register_maintenance.html"><span class="nav-icon" aria-hidden="true">◷</span>Últimos mantenimientos</a></li>
       <li><a href="/validate_document.html"><span class="nav-icon" aria-hidden="true">⌁</span>Validar documento</a></li>
       <li><a href="/history.html"><span class="nav-icon" aria-hidden="true">☷</span>Historial</a></li>
@@ -60,7 +61,7 @@
         </div>
       </section>
     </div>
-    <section class="criteria-section" aria-labelledby="criteria-title"><header><span aria-hidden="true">⚙</span><div><h2 id="criteria-title">Criterios de validación</h2><p>Reglas utilizadas para el análisis del historial de mantenimiento</p></div></header><div class="audit-rules"><article class="audit-rule"><span aria-hidden="true">▣</span><div><small>INTERVALO TEMPORAL</small><strong>≤ 6 meses</strong><small>Periodo máximo entre mantenimientos.</small></div><b>Regla determinista</b></article><article class="audit-rule"><span aria-hidden="true">◔</span><div><small>KILOMETRAJE</small><strong>≤ 10,000 km</strong><small>Distancia máxima entre servicios.</small></div><b>Regla determinista</b></article></div></section>
+    <section class="criteria-section" aria-labelledby="criteria-title"><header><span aria-hidden="true">⚙</span><div><h2 id="criteria-title">Criterios de validación</h2><p>Reglas utilizadas para el análisis del historial de mantenimiento</p></div></header><div class="audit-rules"><article class="audit-rule"><span aria-hidden="true">▣</span><div><small>INTERVALO TEMPORAL</small><strong>Intervalo normal + tolerancia</strong><small>6 meses para Seminuevo (M2) o política activa de la marca para Nuevo (M1), más 1 mes de tolerancia.</small></div><b>Regla determinista</b></article><article class="audit-rule"><span aria-hidden="true">◔</span><div><small>KILOMETRAJE</small><strong>Intervalo normal + tolerancia</strong><small>10,000 km para Seminuevo (M2) o política activa de la marca para Nuevo (M1), más 1,000 km de tolerancia.</small></div><b>Regla determinista</b></article></div></section>
     <div id="audit-new-action" class="audit-new-action hidden"><button id="audit-reset" class="button button-primary" type="button">↻ Comenzar nuevo análisis</button></div>
   </main>
 </div>

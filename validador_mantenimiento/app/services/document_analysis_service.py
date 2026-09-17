@@ -135,7 +135,7 @@ def analyze_document(
     )
     if extraction.metadata:
         document_fields["extraction_metadata"] = extraction.metadata
-        if extraction.method == "ocr":
+        if extraction.method in {"ocr", "tesseract"}:
             document_fields["ocr"] = extraction.metadata
     if parsed.layout_debug:
         document_fields["layout_debug"] = parsed.layout_debug

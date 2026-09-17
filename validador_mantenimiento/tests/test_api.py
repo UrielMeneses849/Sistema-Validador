@@ -4,15 +4,38 @@ from fastapi.testclient import TestClient
 def test_frontend_routes_keep_audit_and_dashboard_available(client: TestClient):
     audit = client.get("/")
     dashboard = client.get("/dashboard.html")
+    manufacturer_rules = client.get("/manufacturer_rules.html")
 
     assert audit.status_code == 200
     assert "Verifica el historial" in audit.text
     assert "/js/audit.js" in audit.text
     assert dashboard.status_code == 200
     assert "Últimas validaciones" in dashboard.text
+    assert manufacturer_rules.status_code == 200
+    assert "Políticas de mantenimiento por marca" in manufacturer_rules.text
+    assert "/js/manufacturer_rules.js" in manufacturer_rules.text
 
 
-def test_vehicle_crud_and_logical_deactivation(client: TestClient):
+def test_history_validation_screen_exposes_multi_pdf_flow(client: TestClient):
+    page = client.get("/validate_document.html")
+    javascript = client.get("/js/validation.js")
+    stylesheet = client.get("/css/styles.css")
+
+    assert page.status_code == 200
+    assert 'id="document-files"' in page.text
+    assert "multiple" in page.text
+    assert "Agregar documentos" in page.text
+    assert "Línea temporal consolidada" in page.text
+    assert javascript.status_code == 200
+    assert "data-remove-file" in javascript.text
+    assert 'API.post("/history-validations"' in javascript.text
+    assert "PERIODO DE TOLERANCIA" in javascript.text
+    assert "summary.tolerance_period" in javascript.text
+    assert ".history-row-tolerance" in stylesheet.text
+    assert ".history-status-tolerance" in stylesheet.text
+
+
+def test_vehicle_crud_and_physical_deletion_without_history(client: TestClient):
     created = client.post(
         "/api/vehicles",
         json={
@@ -29,10 +52,13 @@ def test_vehicle_crud_and_logical_deactivation(client: TestClient):
     updated = client.put(f"/api/vehicles/{vehicle_id}", json={"current_odometer": 30})
     assert updated.status_code == 200
     assert updated.json()["current_odometer"] == 30
-    deactivated = client.delete(f"/api/vehicles/{vehicle_id}")
-    assert deactivated.status_code == 200
-    assert deactivated.json()["status"] == "inactive"
-    assert client.get(f"/api/vehicles/{vehicle_id}").status_code == 200
+    deleted = client.delete(f"/api/vehicles/{vehicle_id}")
+    assert deleted.status_code == 204
+    assert deleted.content == b""
+    assert client.get(f"/api/vehicles/{vehicle_id}").status_code == 404
+    assert all(
+        vehicle["id"] != vehicle_id for vehicle in client.get("/api/vehicles").json()
+    )
 
 
 def test_contract_vehicle_uses_server_consecutive_and_is_listed_for_validation(client: TestClient):
