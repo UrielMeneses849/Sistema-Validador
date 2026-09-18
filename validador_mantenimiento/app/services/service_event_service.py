@@ -1,15 +1,21 @@
 from __future__ import annotations
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.document import Document
 from app.models.service_event import ServiceEvent
+from app.models.validation import Validation
 from app.schemas.service_event_schema import ManualServiceEventCreate, ServiceEventRead, ServiceEventUpdate
 from app.services.document_service import get_document_or_raise
+from app.services.training_dataset_service import record_human_verified_event
 
 
 class ServiceEventNotFoundError(Exception):
     pass
+
+
+CONSISTENCY_WARNING = "El kilometraje disminuye respecto al servicio cronológicamente anterior."
 
 
 def get_service_event_or_raise(db: Session, event_id: int) -> ServiceEvent:
@@ -17,6 +23,74 @@ def get_service_event_or_raise(db: Session, event_id: int) -> ServiceEvent:
     if not event:
         raise ServiceEventNotFoundError(f"No existe el evento de servicio con ID {event_id}.")
     return event
+
+
+def apply_vehicle_consistency_review(db: Session, vehicle_id: int) -> None:
+    """Marca regresiones, nunca cambia fecha/km ni usa coherencia para inventar lecturas."""
+    events = list(
+        db.scalars(
+            select(ServiceEvent)
+            .where(ServiceEvent.vehicle_id == vehicle_id)
+            .order_by(
+                ServiceEvent.service_date.is_(None),
+                ServiceEvent.service_date,
+                ServiceEvent.mileage_km,
+                ServiceEvent.id,
+            )
+        )
+    )
+    previous_mileage: int | None = None
+    for event in events:
+        evidence = dict(event.field_evidence or {})
+        base_review = bool(evidence.get("base_requires_human_review", event.requires_human_review))
+        warnings = [warning for warning in list(event.warnings or []) if warning != CONSISTENCY_WARNING]
+        regression = (
+            event.service_date is not None
+            and event.mileage_km is not None
+            and previous_mileage is not None
+            and event.mileage_km < previous_mileage
+        )
+        if regression:
+            warnings.append(CONSISTENCY_WARNING)
+        event.requires_human_review = base_review or regression
+        event.warnings = warnings
+        evidence["consistency_review"] = {
+            "mileage_regression": regression,
+            "previous_mileage_km": previous_mileage,
+        }
+        event.field_evidence = evidence
+        if event.service_date is not None and event.mileage_km is not None:
+            previous_mileage = event.mileage_km
+
+
+def _recalculate_vehicle_history(db: Session, vehicle_id: int) -> None:
+    """Reemplaza dictámenes derivados del vehículo tras una confirmación humana."""
+    event_ids = list(
+        db.scalars(
+            select(ServiceEvent.id)
+            .where(ServiceEvent.vehicle_id == vehicle_id)
+            .order_by(
+                ServiceEvent.service_date.is_(None),
+                ServiceEvent.service_date,
+                ServiceEvent.mileage_km,
+                ServiceEvent.id,
+            )
+        )
+    )
+    event_id_set = set(event_ids)
+    # Sólo se reemplazan dictámenes derivados de ServiceEvent. Las validaciones
+    # manuales/legadas del vehículo mantienen intacta su trazabilidad.
+    validations = list(db.scalars(select(Validation).where(Validation.vehicle_id == vehicle_id)))
+    for validation in validations:
+        details = validation.analysis_details or {}
+        if details.get("service_event_id") in event_id_set:
+            db.delete(validation)
+    db.commit()
+    # Import local para conservar el desacoplamiento y evitar un ciclo de módulos.
+    from app.services.validation_service import validate_service_event
+
+    for current_id in event_ids:
+        validate_service_event(db, current_id)
 
 
 def update_service_event(db: Session, event_id: int, payload: ServiceEventUpdate) -> ServiceEventRead:
@@ -36,6 +110,7 @@ def update_service_event(db: Session, event_id: int, payload: ServiceEventUpdate
         evidence = dict(event.field_evidence or {})
         evidence["manually_verified"] = True
         evidence["combined_confidence"] = 1.0
+        evidence["base_requires_human_review"] = not fields_complete
         evidence["manual_correction"] = {
             "service_date": event.service_date.isoformat() if event.service_date else None,
             "mileage_km": event.mileage_km,
@@ -77,9 +152,24 @@ def update_service_event(db: Session, event_id: int, payload: ServiceEventUpdate
                 }
         event.field_evidence = evidence
         event.warnings = [] if fields_complete else ["La corrección manual todavía tiene campos incompletos."]
+        db.flush()
+        apply_vehicle_consistency_review(db, event.vehicle_id)
         db.commit()
         db.refresh(event)
+        record_human_verified_event(event)
+        _recalculate_vehicle_history(db, event.vehicle_id)
+        db.refresh(event)
     return ServiceEventRead.model_validate(event)
+
+
+def confirm_service_event(db: Session, event_id: int) -> ServiceEventRead:
+    """Confirma ambos valores visibles sin obligar al usuario a alterarlos."""
+    event = get_service_event_or_raise(db, event_id)
+    return update_service_event(
+        db,
+        event_id,
+        ServiceEventUpdate(service_date=event.service_date, mileage_km=event.mileage_km),
+    )
 
 
 def create_manual_service_event(db: Session, payload: ManualServiceEventCreate) -> ServiceEventRead:
@@ -110,7 +200,11 @@ def create_manual_service_event(db: Session, payload: ManualServiceEventCreate) 
         confidence="high",
         requires_human_review=not bool(resets) or payload.service_date is None or payload.mileage_km is None,
         user_confirmed=True,
-        field_evidence={"source_document_id": document.id, "extraction_method": "manual"},
+        field_evidence={
+            "source_document_id": document.id,
+            "extraction_method": "manual",
+            "base_requires_human_review": not bool(resets) or payload.service_date is None or payload.mileage_km is None,
+        },
         warnings=[] if resets and payload.service_date and payload.mileage_km is not None else ["Datos manuales incompletos o sin clasificación."],
     )
     db.add(event)

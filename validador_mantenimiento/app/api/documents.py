@@ -16,10 +16,16 @@ from app.services.document_service import (
     save_document,
 )
 from app.services.extraction_service import OcrProcessingError, OcrUnavailableError
+from app.services.maintenance_image_recognizer import local_ocr_diagnostics
 from app.services.vehicle_service import VehicleNotFoundError
 
 
 router = APIRouter(prefix="/api/documents", tags=["Documentos"])
+
+
+@router.get("/ocr-diagnostics")
+def ocr_diagnostics() -> dict:
+    return local_ocr_diagnostics()
 
 
 @router.post("/upload", response_model=DocumentRead, status_code=status.HTTP_201_CREATED)

@@ -27,7 +27,7 @@ const MaintenanceAnalysisAPI = {
         documentId = document.id
       }
       const analysis = await this.request(`/documents/${documentId}/analyze`, { method: "POST" }, signal)
-      return { itemId: item.id, documentId, analysis, records: this.toMaintenanceRecords(analysis, item.file.name) }
+      return { itemId: item.id, documentId, analysis, records: this.toMaintenanceRecords(analysis, item.file.name, item.file.type) }
     } catch (error) {
       error.documentId = documentId
       error.itemId = item.id
@@ -35,7 +35,7 @@ const MaintenanceAnalysisAPI = {
     }
   },
 
-  toMaintenanceRecords(analysis, sourceFileName) {
+  toMaintenanceRecords(analysis, sourceFileName, mimeType = "") {
     return (analysis.service_events || []).map((event) => {
       const evidence = event.field_evidence || {}
       const confidence = Number(evidence.combined_confidence ?? ({ high: 0.95, medium: 0.72, low: 0.4 }[event.confidence] || 0))
@@ -47,19 +47,21 @@ const MaintenanceAnalysisAPI = {
         date: event.service_date || "",
         mileage: event.mileage_km ?? "",
         sourceFileName,
-        sourceType: "image",
+        sourceType: mimeType === "application/pdf" || sourceFileName.toLowerCase().endsWith(".pdf") ? "pdf" : "image",
         confidence,
         reviewStatus: manuallyVerified ? "manual" : event.requires_human_review || confidence < 0.88 ? "review" : "confirmed",
         manuallyVerified,
         rawExtractedText: analysis.extracted_text || "",
         fieldEvidence: evidence,
         warnings: [...(analysis.warnings || []), ...(event.warnings || [])],
+        dateCropUrl: evidence.date?.crop_id ? `/api/service-events/${event.id}/evidence/date` : null,
+        mileageCropUrl: evidence.mileage_km?.crop_id ? `/api/service-events/${event.id}/evidence/mileage_km` : null,
       }
     })
   },
 
   async analyzeFiles({ vehicleId, items, signal, onProgress, concurrency = this.concurrency }) {
-    if (items.length > this.maximumFiles) throw new Error(`El máximo es ${this.maximumFiles} imágenes por análisis.`)
+    if (items.length > this.maximumFiles) throw new Error(`El máximo es ${this.maximumFiles} archivos por análisis.`)
     const settled = new Array(items.length)
     let nextIndex = 0
     let completed = 0
@@ -100,6 +102,30 @@ const MaintenanceAnalysisAPI = {
       manuallyVerified: true,
       fieldEvidence: event.field_evidence,
     }
+  },
+
+  async confirmRecord(record, signal) {
+    if (!record.eventId) return record
+    const event = await this.request(`/service-events/${record.eventId}/confirm`, { method: "POST" }, signal)
+    return {
+      ...record,
+      date: event.service_date || "",
+      mileage: event.mileage_km ?? "",
+      confidence: Number(event.field_evidence?.combined_confidence ?? 1),
+      reviewStatus: event.requires_human_review ? "review" : "manual",
+      manuallyVerified: true,
+      fieldEvidence: event.field_evidence,
+      warnings: event.warnings || [],
+    }
+  },
+
+  async validateHistory(vehicleId, eventIds, signal) {
+    if (!eventIds.length) return null
+    return this.request("/history-validations", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ vehicle_id: Number(vehicleId), event_ids: eventIds }),
+    }, signal)
   },
 }
 

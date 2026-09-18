@@ -35,21 +35,21 @@
 
     <div class="audit-workspace">
       <aside class="audit-controls" aria-label="Carga y reglas del análisis">
-        <div class="field audit-vehicle-field"><p class="card-kicker">Vehículo</p><h2>Selecciona el vehículo que quieres auditar.</h2><label for="audit-vehicle">Vehículo <span class="required">*</span></label><select id="audit-vehicle" required><option value="">Cargando vehículos…</option></select><small>Las imágenes deben pertenecer al mismo vehículo.</small></div>
+        <div class="field audit-vehicle-field"><p class="card-kicker">Vehículo</p><h2>Selecciona el vehículo que quieres auditar.</h2><label for="audit-vehicle">Vehículo <span class="required">*</span></label><select id="audit-vehicle" required><option value="">Cargando vehículos…</option></select><small>Todos los documentos deben pertenecer al mismo vehículo.</small></div>
         <div id="audit-dropzone" class="audit-dropzone">
-          <input id="audit-files" class="visually-hidden" type="file" accept="image/jpeg,image/png,image/webp" multiple aria-describedby="audit-upload-help audit-upload-error">
+          <input id="audit-files" class="visually-hidden" type="file" accept="application/pdf,image/jpeg,image/png,image/webp" multiple aria-describedby="audit-upload-help audit-upload-error">
           <button id="audit-file-trigger" class="audit-upload-trigger" type="button">
             <span class="audit-upload-icon" aria-hidden="true">⇧</span>
-            <strong>Arrastra o selecciona imágenes</strong>
-            <span id="audit-upload-help">JPG, PNG o WEBP · máximo 15 · 10 MB c/u</span>
+            <strong>Arrastra o selecciona documentos</strong>
+            <span id="audit-upload-help">PDF, JPG, PNG o WEBP · máximo 15 · 10 MB c/u</span>
           </button>
         </div>
         <p id="audit-upload-error" class="audit-field-error" role="alert"></p>
         <div id="audit-previews" class="audit-previews-panel hidden" aria-label="Imágenes seleccionadas"></div>
-        <p id="audit-demo-note" class="audit-demo-note hidden">Las imágenes se mantienen locales hasta que presiones “Analizar imágenes”.</p>
+        <p id="audit-demo-note" class="audit-demo-note hidden">Los documentos se procesan localmente y no se envían a servicios externos.</p>
         <div id="audit-process-status" class="audit-process-status hidden" role="status"><div><strong id="audit-progress-label">Preparando análisis…</strong><button id="audit-cancel" type="button">Cancelar</button></div><progress id="audit-progress" max="1" value="0"></progress><small id="audit-current-file"></small></div>
         <div id="audit-partial-error" class="notice error" role="alert"></div>
-        <div class="audit-upload-actions"><button id="audit-analyze" class="button button-primary" type="button" disabled>✦ Analizar imágenes</button><button id="audit-retry" class="button button-secondary hidden" type="button">↻ Reintentar fallidas</button><button id="audit-example" class="button button-secondary audit-example" type="button"><span aria-hidden="true">▧</span><span>Ver análisis de ejemplo</span></button></div>
+        <div class="audit-upload-actions"><button id="audit-analyze" class="button button-primary" type="button" disabled>✦ Analizar documentos</button><button id="audit-retry" class="button button-secondary hidden" type="button">↻ Reintentar fallidos</button><button id="audit-example" class="button button-secondary audit-example" type="button"><span aria-hidden="true">▧</span><span>Ver análisis de ejemplo</span></button></div>
       </aside>
 
       <section id="audit-result" class="audit-result" aria-live="polite">

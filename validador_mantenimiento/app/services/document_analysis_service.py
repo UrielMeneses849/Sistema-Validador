@@ -13,6 +13,7 @@ from app.schemas.service_event_schema import ServiceEventRead
 from app.services.document_parser import ParsedDocument, parse_document
 from app.services.document_service import get_document_or_raise
 from app.services.extraction_service import DocumentExtractor, HybridExtractor
+from app.services.service_event_service import apply_vehicle_consistency_review
 
 
 class DocumentAnalysisReprocessConflict(Exception):
@@ -60,6 +61,7 @@ def _create_event(
         "works": parsed_event.work_evidence,
         "combined_confidence": round(parsed_event.confidence_score, 4),
         "manually_verified": False,
+        "base_requires_human_review": parsed_event.requires_human_review,
     }
     return ServiceEvent(
         document_id=document_id,
@@ -124,7 +126,10 @@ def analyze_document(
             return _analysis_read(existing, events)
         _discard_automatic_analysis(db, document.id, existing)
 
-    extraction = (extractor or HybridExtractor()).extract(document.file_path, document.mime_type)
+    extraction = (extractor or HybridExtractor(debug_run_id=str(document.id))).extract(
+        document.file_path,
+        document.mime_type,
+    )
     parsed: ParsedDocument = parse_document(extraction)
     document_fields = {
         name: _field_payload(value, extraction.method, document.id)
@@ -176,6 +181,7 @@ def analyze_document(
         db.flush()
         persisted_events.append(event)
 
+    apply_vehicle_consistency_review(db, document.vehicle_id)
     db.commit()
     db.refresh(analysis)
     for event in persisted_events:

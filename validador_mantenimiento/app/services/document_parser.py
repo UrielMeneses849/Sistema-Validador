@@ -38,6 +38,7 @@ class FieldValue:
     confidence_score: float = 0.0
     candidates: list[dict[str, Any]] = field(default_factory=list)
     ambiguous: bool = False
+    evidence_metadata: dict[str, Any] = field(default_factory=dict)
 
     def evidence(self, method: str) -> dict[str, Any]:
         normalized = self.normalized_value.isoformat() if isinstance(self.normalized_value, date) else self.normalized_value
@@ -50,6 +51,7 @@ class FieldValue:
             "confidence_score": round(self.confidence_score, 4),
             "candidates": self.candidates,
             "ambiguous": self.ambiguous,
+            **self.evidence_metadata,
         }
 
 
@@ -973,7 +975,111 @@ def parse_service_history(result: ExtractionResult, fields: dict[str, FieldValue
     )
 
 
+def _parse_specialized_image(result: ExtractionResult) -> ParsedDocument:
+    """Convierte resultados fecha+km en el contrato neutral que consume VAL-002."""
+    payloads = result.metadata.get("maintenance_image_events", [])
+    events: list[ParsedServiceEvent] = []
+    for payload in payloads:
+        date_payload = payload.get("service_date") or {}
+        mileage_payload = payload.get("mileage") or {}
+        normalized_date = date_payload.get("normalized_value")
+        try:
+            parsed_date = date.fromisoformat(normalized_date) if normalized_date else None
+        except (TypeError, ValueError):
+            parsed_date = None
+        normalized_mileage = mileage_payload.get("normalized_value")
+        try:
+            parsed_mileage = int(normalized_mileage) if normalized_mileage is not None else None
+        except (TypeError, ValueError):
+            parsed_mileage = None
+
+        def candidates(field_payload: dict[str, Any], label: str) -> list[dict[str, Any]]:
+            return [
+                {
+                    **candidate,
+                    "value": candidate.get("normalized_value"),
+                    "rawText": candidate.get("raw_value"),
+                    "label": label,
+                    "page": 1,
+                    "boundingBox": payload.get("region"),
+                    "score": candidate.get("confidence_score", 0.0),
+                    "reasons": ["Consenso entre variantes preprocesadas del recorte especializado."],
+                }
+                for candidate in field_payload.get("candidates", [])
+            ]
+
+        service_date = FieldValue(
+            raw_value=date_payload.get("raw_value"),
+            normalized_value=parsed_date,
+            confidence=date_payload.get("confidence", "low"),
+            source_page=1,
+            confidence_score=float(date_payload.get("confidence_score", 0.0)),
+            candidates=candidates(date_payload, "Fecha"),
+            ambiguous=bool(date_payload.get("ambiguous")),
+            evidence_metadata={
+                "crop_id": date_payload.get("crop_id"),
+                "field_type": "date",
+                "region": payload.get("region"),
+            },
+        )
+        mileage = FieldValue(
+            raw_value=mileage_payload.get("raw_value"),
+            normalized_value=parsed_mileage,
+            confidence=mileage_payload.get("confidence", "low"),
+            source_page=1,
+            confidence_score=float(mileage_payload.get("confidence_score", 0.0)),
+            candidates=candidates(mileage_payload, "Kilometraje"),
+            ambiguous=bool(mileage_payload.get("ambiguous")),
+            evidence_metadata={
+                "crop_id": mileage_payload.get("crop_id"),
+                "field_type": "mileage",
+                "region": payload.get("region"),
+            },
+        )
+        pair_score = min(service_date.confidence_score, mileage.confidence_score)
+        warnings = list(payload.get("warnings") or [])
+        if service_date.normalized_value is None and not any("fecha" in item.lower() for item in warnings):
+            warnings.append("No se detectó una fecha de servicio confiable.")
+        if mileage.normalized_value is None and not any("kilometraje" in item.lower() for item in warnings):
+            warnings.append("No se detectó un kilometraje confiable.")
+        events.append(ParsedServiceEvent(
+            service_date=service_date,
+            mileage=mileage,
+            repair_order_number=FieldValue(),
+            dealer=FieldValue(),
+            service_category="preventive_maintenance",
+            service_type="Mantenimiento preventivo",
+            description="Registro de mantenimiento detectado en imagen.",
+            works=["Registro de mantenimiento"],
+            work_evidence=[{"source": "service_box", "region": payload.get("region")}],
+            resets_maintenance_interval=True,
+            confidence=_confidence_label(pair_score),
+            requires_human_review=bool(payload.get("requires_human_review", True)),
+            confidence_score=pair_score,
+            warnings=warnings,
+        ))
+
+    pages = [(page.page_number, page.text) for page in result.pages if page.text]
+    fields = extract_vehicle(pages) if pages else {}
+    review_count = sum(event.requires_human_review for event in events)
+    return ParsedDocument(
+        document_type="registro_mantenimiento",
+        confidence="high" if events and not review_count else "medium" if events else "low",
+        fields=fields,
+        service_events=events,
+        warnings=list(result.warnings),
+        layout_debug={
+            "strategy": "specialized_service_boxes",
+            "event_count": len(events),
+            "review_count": review_count,
+            "external_fallback_used": False,
+        },
+    )
+
+
 def parse_document(result: ExtractionResult) -> ParsedDocument:
+    if isinstance(result.metadata.get("maintenance_image_events"), list):
+        return _parse_specialized_image(result)
     pages = [(page.page_number, page.text) for page in result.pages if page.text]
     text = result.text
     if not text:
