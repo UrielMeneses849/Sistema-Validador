@@ -11,7 +11,7 @@ La regla central para Seminuevo (M2) es **10,000 km o 6 meses de calendario, lo 
 - Los documentos se conservan con un nombre UUID en `storage/documents/`; nunca se sobrescriben ni se transforman.
 - `pypdf`/`pdfplumber` leen la capa textual de PDF y `pypdfium2` rasteriza PDF escaneado. Tesseract sólo se usa localmente y nunca reemplaza una corrección humana confirmada.
 - El lector de imágenes separa preprocesamiento, layout, cuadros de servicio, crops, reconocimiento, consenso, revisión y persistencia. OpenCV mejora perspectiva, deskew, sombras, CLAHE y umbral adaptativo; existe fallback Pillow cuando OpenCV no está disponible.
-- TrOCR es opcional y se carga exclusivamente desde un directorio local. La app inicia sin Torch/Transformers y expone el diagnóstico en `GET /api/documents/ocr-diagnostics`.
+- TrOCR es opcional, corre en un Python 3.12 aislado y carga exclusivamente un directorio local. La app principal inicia sin Torch/Transformers y expone el diagnóstico en `GET /api/documents/ocr-diagnostics`.
 - Un documento puede producir varios `ServiceEvent`; cada valor conserva evidencia, valor original, normalización, página y método de extracción.
 - Cada validación guarda un resultado y los eventos de auditoría asociados.
 
@@ -55,8 +55,8 @@ Pipeline para una fotografía:
 2. Variantes `original`, `grayscale`, `high_contrast`, `adaptive_threshold`, `shadow_normalized` y `blue_reduced`.
 3. Detección genérica de cuadros mediante etiquetas y, si OpenCV está disponible, líneas/rectángulos.
 4. Recortes mínimos de Fecha y Kilometraje.
-5. OCR de cada recorte sobre todas las variantes.
-6. Consenso: confianza OCR 35%, acuerdo entre variantes 35%, validez de formato 20% y cercanía a etiqueta 10%.
+5. Tesseract sobre las variantes del recorte y, si se habilita, TrOCR únicamente sobre esos mismos campos.
+6. Consenso conservador: coincidencia entre motores refuerza; desacuerdo o resultado exclusivo de TrOCR obliga a revisión.
 7. Revisión humana si el par queda debajo de `OCR_REVIEW_THRESHOLD`, es ambiguo, futuro, improbable o regresivo.
 8. Conversión al mismo `ServiceEvent` usado por PDF y validación VAL-002.
 
@@ -74,6 +74,8 @@ Configuración opcional exclusivamente del servidor:
 | `OCR_MAX_IMAGES_PER_ANALYSIS` | `15` | Límite coordinado con la UI. |
 | `OCR_MAX_IMAGE_PIXELS` | `40000000` | Protección contra imágenes excesivas. |
 | `HANDWRITING_MODEL_PATH` | vacío | Directorio local de un TrOCR promovido explícitamente. |
+| `HANDWRITING_PYTHON` | vacío | Ejecutable Python del entorno aislado de TrOCR. |
+| `HANDWRITING_TIMEOUT_SECONDS` | `180` | Tiempo máximo de carga o respuesta del worker local. |
 | `OCR_DEBUG` | `false` | Guarda etapas visuales y candidatos cuando vale `1`, `true`, `yes` u `on`. |
 | `OCR_DEBUG_DIR` | `debug_ocr/` | Carpeta local de diagnóstico, ignorada por Git. |
 
@@ -132,31 +134,51 @@ python -m training.label_real_fixture ruta/foto.jpeg
 
 # Alternativa no interactiva
 python -m training.label_real_fixture ruta/foto.jpeg \
+  --group development \
   --event 2025-10-24 88913 \
   --event 2026-05-10 100000
 
+# Si sólo se verificó un cuadro, no inventar etiquetas para el resto
+python -m training.label_real_fixture ruta/foto.jpeg \
+  --group development \
+  --region-event 3 2025-05-28 36389
+
 python -m training.evaluate_real_benchmark \
+  --group development \
   --save-predictions benchmark_data/real_photos/predictions.jsonl \
   --output benchmark_data/real_photos/report.json
 ```
 
 El reporte incluye cuadros detectados, eventos esperados/detectados, exactitud exacta por campo y par, revisión humana, falsas aceptaciones y fallos detallados por imagen. Estas fotografías no deben reutilizarse para entrenamiento.
 
-## TrOCR opcional y fine-tuning
+## TrOCR preentrenado opcional
 
-Torch/Transformers no forman parte del entorno principal. Crea otro venv, instala `requirements-ocr-ml.txt` y proporciona un checkpoint base que ya exista localmente:
+Torch/Transformers no forman parte del entorno principal. La configuración reproducible usa Python 3.12 en otro venv y descarga el checkpoint público una sola vez:
 
 ```bash
-python -m training.train_handwriting_model \
-  --dataset training_data/exports/v1 \
-  --base-model /ruta/local/trocr-base-handwritten
+/opt/homebrew/bin/python3.12 -m venv .venv-ocr
+.venv-ocr/bin/pip install -r requirements-ocr-ml.txt
+.venv-ocr/bin/python -m training.download_handwriting_model
 
-python -m training.evaluate_model \
-  --dataset training_data/exports/v1/test.jsonl \
-  --model models/maintenance_handwriting_v1
+HANDWRITING_MODEL_PATH="$PWD/models/pretrained/trocr-base-handwritten" \
+HANDWRITING_PYTHON="$PWD/.venv-ocr/bin/python" \
+uvicorn app.main:app --reload
 ```
 
-El dispositivo se selecciona MPS → CUDA → CPU. Cada entrenamiento crea `maintenance_handwriting_vN` y **no lo activa**. Tras evaluar especialmente `FALSE_ACCEPT_RATE`, se promueve manualmente configurando `HANDWRITING_MODEL_PATH`. La inferencia usa `local_files_only=True` y nunca descarga modelos durante la aplicación normal.
+El dispositivo se selecciona MPS → CUDA → CPU. La descarga inicial guarda modelo, procesador, revisión de origen y manifiesto en `models/pretrained/trocr-base-handwritten/`, ignorado por Git. La inferencia usa `local_files_only=True`, `HF_HUB_OFFLINE=1` y `TRANSFORMERS_OFFLINE=1`; no realiza HTTP ni usa API keys. Esta fase usa el modelo base sin fine-tuning.
+
+Para comparar sin mezclar fotografías con entrenamiento:
+
+```bash
+# Línea base
+python -m training.evaluate_real_benchmark --output /tmp/tesseract.json
+
+# Híbrido local
+python -m training.evaluate_real_benchmark \
+  --handwriting-model models/pretrained/trocr-base-handwritten \
+  --handwriting-python .venv-ocr/bin/python \
+  --output /tmp/hybrid.json
+```
 
 ## Análisis automático de PDF digital
 

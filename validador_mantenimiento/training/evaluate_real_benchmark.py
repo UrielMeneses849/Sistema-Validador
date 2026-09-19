@@ -28,13 +28,29 @@ def main(argv: Sequence[str] | None = None) -> None:
     parser.add_argument("--save-predictions", type=Path, help="Guarda las predicciones de esta ejecución como JSONL.")
     parser.add_argument("--output", type=Path, help="Guarda el reporte completo como JSON.")
     parser.add_argument("--threshold", type=float, default=0.88, help="Umbral usado si una predicción no trae revisión explícita.")
+    parser.add_argument("--handwriting-model", type=Path, help="Directorio local de TrOCR; omitir para Tesseract solo.")
+    parser.add_argument("--handwriting-python", type=Path, help="Python del entorno OCR aislado.")
+    parser.add_argument("--debug-dir", type=Path, help="Activa y guarda depuración por recorte en este directorio.")
+    parser.add_argument("--debug-run-prefix", default="benchmark")
+    parser.add_argument("--group", help="Evalúa sólo fotografías completas del grupo indicado.")
     args = parser.parse_args(argv)
     if not 0.0 <= args.threshold <= 1.0:
         parser.error("--threshold debe estar entre 0 y 1.")
 
     try:
         fixtures = load_ground_truth(args.ground_truth)
-        predictions = load_predictions(args.predictions) if args.predictions else run_local_predictions(fixtures)
+        if args.group:
+            fixtures = [fixture for fixture in fixtures if fixture.get("group") == args.group]
+            if not fixtures:
+                raise ValueError(f"No hay fotografías en el grupo {args.group!r}.")
+        predictions = load_predictions(args.predictions) if args.predictions else run_local_predictions(
+            fixtures,
+            handwriting_model_path=args.handwriting_model,
+            handwriting_python=args.handwriting_python,
+            debug_enabled=bool(args.debug_dir),
+            debug_directory=args.debug_dir,
+            debug_run_prefix=args.debug_run_prefix,
+        )
         if args.save_predictions:
             write_jsonl(args.save_predictions, predictions)
         report = evaluate_real_benchmark(fixtures, predictions, threshold=args.threshold)

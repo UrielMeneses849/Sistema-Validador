@@ -3,7 +3,8 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from dataclasses import asdict, dataclass
+import time
+from dataclasses import dataclass
 from datetime import date
 from functools import lru_cache
 from pathlib import Path
@@ -12,16 +13,21 @@ from typing import Any, Iterable
 
 PROJECT_DIR = Path(__file__).resolve().parents[1]
 DEFAULT_GROUND_TRUTH = PROJECT_DIR / "benchmark_data" / "real_photos" / "ground_truth.jsonl"
-GROUND_TRUTH_SCHEMA_VERSION = 1
+GROUND_TRUTH_SCHEMA_VERSION = 2
 
 
 @dataclass(frozen=True)
 class GroundTruthEvent:
     service_date: str
     mileage_km: int
+    region_index: int | None = None
 
 
-def normalize_ground_truth_event(service_date: str, mileage_km: str | int) -> GroundTruthEvent:
+def normalize_ground_truth_event(
+    service_date: str,
+    mileage_km: str | int,
+    region_index: str | int | None = None,
+) -> GroundTruthEvent:
     try:
         normalized_date = date.fromisoformat(str(service_date).strip()).isoformat()
     except ValueError as exc:
@@ -30,7 +36,25 @@ def normalize_ground_truth_event(service_date: str, mileage_km: str | int) -> Gr
     raw_mileage = str(mileage_km).strip().replace(",", "").replace(".", "").replace(" ", "")
     if not re.fullmatch(r"\d+", raw_mileage):
         raise ValueError("mileage_km debe ser un entero no negativo.")
-    return GroundTruthEvent(normalized_date, int(raw_mileage))
+    normalized_region: int | None = None
+    if region_index is not None:
+        try:
+            normalized_region = int(region_index)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("region_index debe ser un entero positivo.") from exc
+        if normalized_region < 1:
+            raise ValueError("region_index debe ser un entero positivo.")
+    return GroundTruthEvent(normalized_date, int(raw_mileage), normalized_region)
+
+
+def _ground_truth_payload(event: GroundTruthEvent) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "service_date": event.service_date,
+        "mileage_km": event.mileage_km,
+    }
+    if event.region_index is not None:
+        payload["region_index"] = event.region_index
+    return payload
 
 
 def image_sha256(image_path: str | Path) -> str:
@@ -74,6 +98,7 @@ def save_ground_truth(
     events: Iterable[GroundTruthEvent | dict[str, Any] | tuple[str, str | int]],
     *,
     ground_truth_path: str | Path = DEFAULT_GROUND_TRUTH,
+    group: str = "development",
 ) -> tuple[dict[str, Any], bool]:
     image = Path(image_path).expanduser().resolve()
     if not image.is_file():
@@ -82,15 +107,28 @@ def save_ground_truth(
     normalized_events: list[GroundTruthEvent] = []
     for event in events:
         if isinstance(event, GroundTruthEvent):
-            normalized_events.append(normalize_ground_truth_event(event.service_date, event.mileage_km))
+            normalized_events.append(
+                normalize_ground_truth_event(event.service_date, event.mileage_km, event.region_index)
+            )
         elif isinstance(event, dict):
             normalized_events.append(
-                normalize_ground_truth_event(str(event.get("service_date", "")), event.get("mileage_km", ""))
+                normalize_ground_truth_event(
+                    str(event.get("service_date", "")),
+                    event.get("mileage_km", ""),
+                    event.get("region_index"),
+                )
             )
         else:
-            normalized_events.append(normalize_ground_truth_event(event[0], event[1]))
+            normalized_events.append(
+                normalize_ground_truth_event(
+                    event[0], event[1], event[2] if len(event) > 2 else None
+                )
+            )
     if not normalized_events:
         raise ValueError("Registra al menos un evento para la fotografía.")
+    normalized_group = re.sub(r"[^a-z0-9_-]+", "-", group.strip().lower()).strip("-")
+    if not normalized_group:
+        raise ValueError("group debe identificar el conjunto completo de la fotografía.")
 
     content_hash = image_sha256(image)
     fixture_id = content_hash[:20]
@@ -99,7 +137,9 @@ def save_ground_truth(
         "fixture_id": fixture_id,
         "image_sha256": content_hash,
         "image": str(image),
-        "events": [asdict(event) for event in normalized_events],
+        "group": normalized_group,
+        "partial": any(event.region_index is not None for event in normalized_events),
+        "events": [_ground_truth_payload(event) for event in normalized_events],
     }
 
     destination = Path(ground_truth_path)
@@ -126,20 +166,31 @@ def load_ground_truth(path: str | Path = DEFAULT_GROUND_TRUTH) -> list[dict[str,
     for index, row in enumerate(rows, start=1):
         fixture_id = str(row.get("fixture_id") or "").strip()
         image = str(row.get("image") or "").strip()
+        group = str(row.get("group") or "development").strip()
         events = row.get("events")
         if not fixture_id or fixture_id in seen:
             raise ValueError(f"Fixture inválido o duplicado en la línea {index}: {fixture_id!r}.")
         if not image or not isinstance(events, list) or not events:
             raise ValueError(f"La línea {index} requiere image y al menos un evento.")
         normalized_events = [
-            asdict(normalize_ground_truth_event(event.get("service_date", ""), event.get("mileage_km", "")))
+            _ground_truth_payload(normalize_ground_truth_event(
+                event.get("service_date", ""),
+                event.get("mileage_km", ""),
+                event.get("region_index"),
+            ))
             for event in events
             if isinstance(event, dict)
         ]
         if len(normalized_events) != len(events):
             raise ValueError(f"Todos los eventos de la línea {index} deben ser objetos JSON.")
         seen.add(fixture_id)
-        validated.append({**row, "fixture_id": fixture_id, "image": image, "events": normalized_events})
+        validated.append({
+            **row,
+            "fixture_id": fixture_id,
+            "image": image,
+            "group": group,
+            "events": normalized_events,
+        })
     return validated
 
 
@@ -190,6 +241,7 @@ def prediction_from_extraction(fixture: dict[str, Any], extraction: Any) -> dict
             "confidence_score": event.get("confidence_score", 0.0),
             "requires_human_review": bool(event.get("requires_human_review", True)),
             "region": event.get("region"),
+            "region_index": event.get("region_index"),
         })
     diagnostics = metadata.get("diagnostics") or []
     return {
@@ -201,18 +253,38 @@ def prediction_from_extraction(fixture: dict[str, Any], extraction: Any) -> dict
     }
 
 
-def run_local_predictions(fixtures: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def run_local_predictions(
+    fixtures: list[dict[str, Any]],
+    *,
+    handwriting_model_path: str | Path | None = None,
+    handwriting_python: str | Path | None = None,
+    debug_enabled: bool = False,
+    debug_directory: str | Path | None = None,
+    debug_run_prefix: str | None = None,
+) -> list[dict[str, Any]]:
     # Import tardío: analizar predicciones guardadas no debe requerir Tesseract ni OpenCV.
     from app.services.extraction_service import OcrExtractor
 
-    extractor = OcrExtractor()
     predictions: list[dict[str, Any]] = []
     mime_types = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png", ".webp": "image/webp"}
     for fixture in fixtures:
         image = Path(fixture["image"]).expanduser()
         try:
+            extractor = OcrExtractor(
+                handwriting_model_path=handwriting_model_path,
+                handwriting_python=handwriting_python,
+                debug_enabled=debug_enabled,
+                debug_directory=debug_directory or PROJECT_DIR / "debug_ocr",
+                debug_run_id=(
+                    f"{debug_run_prefix}-{fixture['fixture_id']}"
+                    if debug_run_prefix else None
+                ),
+            )
+            started = time.perf_counter()
             extraction = extractor.extract(str(image), mime_types.get(image.suffix.lower(), "application/octet-stream"))
-            predictions.append(prediction_from_extraction(fixture, extraction))
+            prediction = prediction_from_extraction(fixture, extraction)
+            prediction["processing_seconds"] = round(time.perf_counter() - started, 4)
+            predictions.append(prediction)
         except Exception as exc:  # El benchmark debe conservar los demás resultados y señalar el fixture fallido.
             predictions.append({
                 "fixture_id": fixture["fixture_id"],
@@ -348,7 +420,18 @@ def evaluate_real_benchmark(
     for fixture in ground_truth:
         expected = fixture["events"]
         prediction = prediction_by_id.get(str(fixture["fixture_id"]), {})
-        predicted = prediction.get("events") if isinstance(prediction.get("events"), list) else []
+        all_predicted = prediction.get("events") if isinstance(prediction.get("events"), list) else []
+        partial = bool(fixture.get("partial"))
+        annotated_regions = {
+            int(event["region_index"])
+            for event in expected
+            if event.get("region_index") is not None
+        }
+        predicted = (
+            [event for event in all_predicted if event.get("region_index") in annotated_regions]
+            if partial and annotated_regions
+            else all_predicted
+        )
         fixture_boxes = max(0, int(prediction.get("boxes_detected", len(predicted)) or 0))
         boxes_detected += fixture_boxes
         expected_total += len(expected)
@@ -407,7 +490,7 @@ def evaluate_real_benchmark(
                     "requires_human_review": requires_review,
                 })
 
-        if fixture_boxes != len(expected):
+        if not partial and fixture_boxes != len(expected):
             failures.insert(0, {
                 "type": "box_count_mismatch",
                 "expected": len(expected),
@@ -422,6 +505,9 @@ def evaluate_real_benchmark(
             "boxes_detected": fixture_boxes,
             "expected_events": len(expected),
             "detected_events": len(predicted),
+            "total_unverified_events": len(all_predicted) if partial else 0,
+            "partial_ground_truth": partial,
+            "processing_seconds": prediction.get("processing_seconds"),
             "matches": pair_details,
             "failures": failures,
         })

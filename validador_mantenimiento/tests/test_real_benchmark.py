@@ -66,6 +66,34 @@ def test_label_cli_supports_repeated_noninteractive_events(tmp_path, capsys):
     assert len(load_ground_truth(manifest)[0]["events"]) == 2
 
 
+def test_partial_region_ground_truth_evaluates_only_the_verified_box(tmp_path, capsys):
+    image = _image(tmp_path / "fixture.png")
+    manifest = tmp_path / "truth.jsonl"
+    label_main([
+        str(image),
+        "--ground-truth", str(manifest),
+        "--region-event", "3", "2025-05-28", "36389",
+    ])
+    capsys.readouterr()
+    fixture = load_ground_truth(manifest)[0]
+    assert fixture["partial"] is True
+    assert fixture["events"][0]["region_index"] == 3
+
+    report = evaluate_real_benchmark([fixture], [{
+        "fixture_id": fixture["fixture_id"],
+        "boxes_detected": 6,
+        "events": [
+            {"region_index": 1, "service_date": "2020-01-01", "mileage_km": 1, "requires_human_review": False},
+            {"region_index": 3, "service_date": "2025-05-28", "mileage_km": 36389, "requires_human_review": True},
+        ],
+    }])
+    assert report["expected_events"] == 1
+    assert report["detected_events"] == 1
+    assert report["PAIR_EXACT_ACCURACY"] == 1.0
+    assert report["FALSE_ACCEPT_RATE"] == 0.0
+    assert report["images_with_failures"] == 0
+
+
 def test_invalid_ground_truth_is_rejected(tmp_path):
     image = _image(tmp_path / "fixture.png")
     with pytest.raises(ValueError, match="YYYY-MM-DD"):

@@ -1,7 +1,14 @@
 from __future__ import annotations
 
+import base64
+import io
+import json
+import os
 import re
+import select
 import shutil
+import subprocess
+import time
 import unicodedata
 from collections import defaultdict
 from dataclasses import asdict, dataclass, field
@@ -14,6 +21,8 @@ from PIL import Image
 
 from app.core.config import (
     EVIDENCE_CROP_DIR,
+    HANDWRITING_PYTHON,
+    HANDWRITING_TIMEOUT_SECONDS,
     HANDWRITING_MODEL_PATH,
     OCR_DEBUG,
     OCR_DEBUG_DIR,
@@ -81,6 +90,7 @@ class OcrReading:
     text: str
     confidence: float
     provider: str = "tesseract"
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 class FieldOcrBackend(Protocol):
@@ -124,6 +134,7 @@ class RecognizedField:
     ambiguous: bool
     crop_id: str | None
     candidates: list[dict[str, Any]] = field(default_factory=list)
+    selection_reason: str = ""
 
 
 @dataclass(frozen=True)
@@ -144,6 +155,7 @@ class RecognizedServiceEvent:
     requires_human_review: bool
     warnings: list[str]
     region: dict[str, int]
+    region_index: int | None = None
 
 
 @dataclass(frozen=True)
@@ -285,6 +297,24 @@ def parse_mileage_candidates(text: str) -> list[tuple[int, str, float]]:
     return candidates
 
 
+def parse_trocr_mileage_candidate(text: str) -> list[tuple[int, str, float]]:
+    """Tolera un sufijo alfabético corto de TrOCR, pero sólo si toda la salida es un número."""
+    match = re.fullmatch(
+        r"\s*(\d{2,3}(?:[,\.\s]\d{3})+|\d{2,7})\s*([A-Za-z]{1,3})?\s*\.?\s*",
+        text,
+    )
+    if not match:
+        return []
+    digits = re.sub(r"\D", "", match.group(1))
+    value = int(digits)
+    if value > 2_000_000 or (1900 <= value <= 2100 and len(digits) == 4):
+        return []
+    # El sufijo es evidencia de alucinación; la calidad reducida y el límite TrOCR-only
+    # garantizan revisión humana aun cuando varias variantes coincidan.
+    quality = 0.72 if match.group(2) else 0.88
+    return [(value, match.group(1), quality)]
+
+
 def evaluate_consensus(
     field_type: FieldType,
     candidates: list[RecognitionCandidate],
@@ -292,9 +322,12 @@ def evaluate_consensus(
     attempted_variants: int,
     crop_id: str | None = None,
 ) -> RecognizedField:
-    """Confianza documentada: OCR 35%, acuerdo 35%, formato 20%, etiqueta 10%."""
+    """Combina variantes y motores sin aceptar silenciosamente un desacuerdo."""
     if not candidates:
-        return RecognizedField(field_type, None, None, 0.0, "low", False, crop_id, [])
+        return RecognizedField(
+            field_type, None, None, 0.0, "low", False, crop_id, [],
+            "Ningún motor produjo un valor válido para el campo.",
+        )
     grouped: dict[str | int, list[RecognitionCandidate]] = defaultdict(list)
     for candidate in candidates:
         grouped[candidate.normalized_value].append(candidate)
@@ -312,10 +345,37 @@ def evaluate_consensus(
             score = min(score, 0.79)
         scored.append((round(score, 4), value, items))
     scored.sort(key=lambda item: (item[0], len(item[2])), reverse=True)
-    best_score, best_value, best_items = scored[0]
-    ambiguous = bool(len(scored) > 1 and scored[1][0] >= best_score - 0.06)
-    if ambiguous:
-        best_score = min(best_score, 0.75)
+    engine_values: dict[str, set[str | int]] = {"tesseract": set(), "trocr": set()}
+    for candidate in candidates:
+        engine = "trocr" if candidate.provider == "trocr_local" else "tesseract"
+        engine_values[engine].add(candidate.normalized_value)
+
+    both_engines = bool(engine_values["tesseract"] and engine_values["trocr"])
+    common_values = engine_values["tesseract"] & engine_values["trocr"]
+    if common_values:
+        eligible = [item for item in scored if item[1] in common_values]
+        best_score, best_value, best_items = eligible[0]
+        best_score = min(0.99, best_score + 0.08)
+        ambiguous = False
+        selection_reason = "Tesseract y TrOCR coincidieron en el mismo valor válido."
+    else:
+        best_score, best_value, best_items = scored[0]
+        close_alternative = bool(len(scored) > 1 and scored[1][0] >= best_score - 0.06)
+        if both_engines:
+            ambiguous = True
+            best_score = min(best_score, 0.75)
+            selection_reason = "Tesseract y TrOCR produjeron valores plausibles distintos; requiere revisión."
+        elif engine_values["trocr"]:
+            ambiguous = close_alternative
+            best_score = min(best_score, 0.75 if ambiguous else 0.84)
+            selection_reason = "Sólo TrOCR produjo un valor válido; se conserva con confianza limitada."
+        else:
+            ambiguous = close_alternative
+            if ambiguous:
+                best_score = min(best_score, 0.75)
+                selection_reason = "Tesseract produjo alternativas cercanas; requiere revisión."
+            else:
+                selection_reason = "Sólo Tesseract produjo un valor válido; se aplicaron las reglas normales."
     confidence = "high" if best_score >= OCR_REVIEW_THRESHOLD else "medium" if best_score >= 0.60 else "low"
     public_candidates = []
     for score, value, items in scored:
@@ -325,6 +385,7 @@ def evaluate_consensus(
             "confidence_score": score,
             "variants": sorted({item.variant for item in items}),
             "providers": sorted({item.provider for item in items}),
+            "engines": sorted({"trocr" if item.provider == "trocr_local" else "tesseract" for item in items}),
             "support": len({(item.variant, item.provider) for item in items}),
             "selected": value == best_value,
         })
@@ -337,6 +398,7 @@ def evaluate_consensus(
         ambiguous=ambiguous,
         crop_id=crop_id,
         candidates=public_candidates,
+        selection_reason=selection_reason,
     )
 
 
@@ -402,13 +464,24 @@ class TesseractFieldOcrBackend:
 
 
 class OptionalTrOcrFieldRecognizer:
-    """Adaptador manuscrito local y lazy; sólo carga un directorio ya presente en disco."""
+    """Adaptador local/offline; ejecuta Torch fuera del entorno principal cuando se configura."""
 
     name = "trocr_local"
 
-    def __init__(self, model_path: str | Path | None = HANDWRITING_MODEL_PATH) -> None:
+    def __init__(
+        self,
+        model_path: str | Path | None = HANDWRITING_MODEL_PATH,
+        *,
+        python_executable: str | Path | None = HANDWRITING_PYTHON,
+        timeout_seconds: float = HANDWRITING_TIMEOUT_SECONDS,
+    ) -> None:
         self.model_path = Path(model_path).expanduser() if model_path else None
+        self.python_executable = Path(python_executable).expanduser() if python_executable else None
+        self.timeout_seconds = timeout_seconds
         self._loaded: tuple[Any, Any, Any, str] | None = None
+        self._worker: subprocess.Popen[str] | None = None
+        self._worker_device: str | None = None
+        self._model_load_seconds: float | None = None
 
     @property
     def configured(self) -> bool:
@@ -419,12 +492,68 @@ class OptionalTrOcrFieldRecognizer:
             return "TrOCR opcional desactivado: HANDWRITING_MODEL_PATH no está configurado."
         if not self.model_path.is_dir():
             return f"TrOCR opcional desactivado: no existe el modelo local {self.model_path}."
+        if self.python_executable:
+            if not self.python_executable.is_file():
+                return f"TrOCR opcional desactivado: no existe el Python aislado {self.python_executable}."
+            return f"TrOCR local disponible mediante el entorno aislado {self.python_executable}."
         try:
             import torch  # noqa: F401
             import transformers  # noqa: F401
         except ImportError:
-            return "TrOCR opcional desactivado: instala requirements-ocr-ml.txt en un entorno aislado."
-        return "TrOCR local disponible."
+            return "TrOCR opcional desactivado: configura HANDWRITING_PYTHON con el entorno aislado."
+        return "TrOCR local disponible en el proceso actual."
+
+    def _read_worker_response(self) -> dict[str, Any]:
+        if self._worker is None or self._worker.stdout is None:
+            raise RecognizerUnavailableError("El proceso local de TrOCR no está activo.")
+        ready, _, _ = select.select([self._worker.stdout], [], [], self.timeout_seconds)
+        if not ready:
+            self.close()
+            raise RecognizerUnavailableError("TrOCR local excedió el tiempo máximo de respuesta.")
+        line = self._worker.stdout.readline()
+        if not line:
+            code = self._worker.poll()
+            self.close()
+            raise RecognizerUnavailableError(f"El proceso local de TrOCR terminó inesperadamente ({code}).")
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise RecognizerUnavailableError("TrOCR local devolvió una respuesta inválida.") from exc
+        if payload.get("error"):
+            raise RecognizerUnavailableError(f"TrOCR local: {payload['error']}")
+        return payload
+
+    def _ensure_worker(self) -> None:
+        if self._worker is not None and self._worker.poll() is None:
+            return
+        if not self.configured or not self.python_executable or not self.python_executable.is_file():
+            raise RecognizerUnavailableError(self.diagnostic())
+        environment = os.environ.copy()
+        environment.update({
+            "HF_HUB_OFFLINE": "1",
+            "TRANSFORMERS_OFFLINE": "1",
+            "HF_HUB_DISABLE_TELEMETRY": "1",
+            "TOKENIZERS_PARALLELISM": "false",
+        })
+        self._worker = subprocess.Popen(
+            [
+                str(self.python_executable), "-m", "training.trocr_inference_worker",
+                "--model", str(self.model_path.resolve()),
+            ],
+            cwd=str(Path(__file__).resolve().parents[2]),
+            env=environment,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            bufsize=1,
+        )
+        ready = self._read_worker_response()
+        if not ready.get("ready"):
+            self.close()
+            raise RecognizerUnavailableError("TrOCR local no confirmó que el modelo estuviera listo.")
+        self._worker_device = str(ready.get("device") or "unknown")
+        self._model_load_seconds = float(ready.get("model_load_seconds") or 0.0)
 
     def _load(self):
         if self._loaded is not None:
@@ -445,13 +574,54 @@ class OptionalTrOcrFieldRecognizer:
         return self._loaded
 
     def read_field(self, image: Image.Image, *, field_type: FieldType, variant: str) -> OcrReading:
+        if self.python_executable:
+            self._ensure_worker()
+            if self._worker is None or self._worker.stdin is None:
+                raise RecognizerUnavailableError("No se pudo iniciar el proceso local de TrOCR.")
+            buffer = io.BytesIO()
+            image.convert("RGB").save(buffer, format="PNG")
+            request = {
+                "image_base64": base64.b64encode(buffer.getvalue()).decode("ascii"),
+                "field_type": field_type,
+                "variant": variant,
+            }
+            self._worker.stdin.write(json.dumps(request, separators=(",", ":")) + "\n")
+            self._worker.stdin.flush()
+            response = self._read_worker_response()
+            return OcrReading(
+                str(response.get("text") or "").strip(),
+                max(0.0, min(1.0, float(response.get("confidence") or 0.0))),
+                self.name,
+                {
+                    "device": response.get("device", self._worker_device),
+                    "model_load_seconds": response.get("model_load_seconds", self._model_load_seconds),
+                    "inference_seconds": response.get("inference_seconds"),
+                    "token_count": response.get("token_count"),
+                },
+            )
         torch, processor, model, device = self._load()
         with torch.inference_mode():
             pixels = processor(images=image.convert("RGB"), return_tensors="pt").pixel_values.to(device)
             generated = model.generate(pixels, max_new_tokens=32)
         text = processor.batch_decode(generated, skip_special_tokens=True)[0]
         # Sin calibración propia no se interpreta la probabilidad generativa como certeza del campo.
-        return OcrReading(text.strip(), 0.68, self.name)
+        return OcrReading(text.strip(), 0.0, self.name, {"device": device, "confidence_calibrated": False})
+
+    def close(self) -> None:
+        worker, self._worker = self._worker, None
+        if worker is None:
+            return
+        try:
+            if worker.poll() is None and worker.stdin is not None:
+                worker.stdin.write('{"command":"shutdown"}\n')
+                worker.stdin.flush()
+                worker.wait(timeout=5)
+        except (BrokenPipeError, OSError, subprocess.TimeoutExpired):
+            if worker.poll() is None:
+                worker.terminate()
+
+    def __del__(self) -> None:
+        self.close()
 
 
 def _is_date_label(token: OcrToken) -> bool:
@@ -743,6 +913,7 @@ class LocalMaintenanceImageRecognizer:
     """Pipeline especializado fecha+km. No transcribe ni envía la página a servicios externos."""
 
     recognition_variants = ("original", "grayscale", "high_contrast", "adaptive_threshold", "shadow_normalized", "blue_reduced")
+    handwriting_variants = ("original", "grayscale", "high_contrast")
 
     def __init__(
         self,
@@ -777,14 +948,17 @@ class LocalMaintenanceImageRecognizer:
             path = variants.variants.get(variant)
             if path is None:
                 continue
+            started = time.perf_counter()
             with Image.open(path) as image:
                 reading = self.ocr_backend.read_field(image.crop((crop.x0, crop.y0, crop.x1, crop.y1)), field_type=field_type, variant=variant)
+            wall_seconds = time.perf_counter() - started
             parsed = parser(reading.text)
             attempts.append({
                 "variant": variant,
                 "provider": reading.provider,
                 "raw_text": reading.text,
                 "ocr_confidence": round(reading.confidence, 4),
+                "runtime": {**reading.metadata, "wall_seconds": round(wall_seconds, 4)},
                 "parsed_candidates": [
                     {"normalized_value": normalized, "raw_value": raw, "format_confidence": format_confidence}
                     for normalized, raw, format_confidence in parsed
@@ -800,20 +974,29 @@ class LocalMaintenanceImageRecognizer:
                     provider=reading.provider,
                 ))
         if self.handwriting_recognizer.configured:
-            path = variants.variants.get("original")
-            if path:
+            for variant in self.handwriting_variants:
+                path = variants.variants.get(variant)
+                if path is None:
+                    continue
                 try:
+                    started = time.perf_counter()
                     with Image.open(path) as image:
                         crop_image = image.crop((crop.x0, crop.y0, crop.x1, crop.y1))
                         reading = self.handwriting_recognizer.read_field(
-                            crop_image, field_type=field_type, variant="original"
+                            crop_image, field_type=field_type, variant=variant
                         )
-                    parsed = parser(reading.text)
+                    wall_seconds = time.perf_counter() - started
+                    parsed = (
+                        parse_trocr_mileage_candidate(reading.text)
+                        if field_type == "mileage"
+                        else parser(reading.text)
+                    )
                     attempts.append({
-                        "variant": "handwriting",
+                        "variant": variant,
                         "provider": reading.provider,
                         "raw_text": reading.text,
                         "ocr_confidence": round(reading.confidence, 4),
+                        "runtime": {**reading.metadata, "wall_seconds": round(wall_seconds, 4)},
                         "parsed_candidates": [
                             {"normalized_value": normalized, "raw_value": raw, "format_confidence": format_confidence}
                             for normalized, raw, format_confidence in parsed
@@ -822,11 +1005,40 @@ class LocalMaintenanceImageRecognizer:
                     for normalized, raw, format_confidence in parsed:
                         candidates.append(RecognitionCandidate(
                             raw, normalized, reading.confidence, format_confidence,
-                            "handwriting", reading.provider,
+                            variant, reading.provider,
                         ))
-                except RecognizerUnavailableError:
-                    pass
+                except RecognizerUnavailableError as exc:
+                    attempts.append({
+                        "variant": variant,
+                        "provider": self.handwriting_recognizer.name,
+                        "error": str(exc),
+                        "parsed_candidates": [],
+                    })
+                    break
         return candidates, attempts
+
+    @staticmethod
+    def _decision_payload(
+        recognized: RecognizedField,
+        attempts: list[dict[str, Any]],
+        *,
+        requires_human_review: bool,
+    ) -> dict[str, Any]:
+        def attempts_for(provider: str) -> list[dict[str, Any]]:
+            return [item for item in attempts if item.get("provider") == provider]
+
+        return {
+            "tesseract_candidates": attempts_for("tesseract")
+            or [item for item in attempts if item.get("provider") != "trocr_local"],
+            "trocr_candidates": attempts_for("trocr_local"),
+            "selected_candidate": recognized.normalized_value,
+            "selected_raw_value": recognized.raw_value,
+            "selection_reason": recognized.selection_reason,
+            "confidence_score": recognized.confidence_score,
+            "confidence": recognized.confidence,
+            "ambiguous": recognized.ambiguous,
+            "requires_human_review": requires_human_review,
+        }
 
     def _save_crop(
         self, variants: ImageVariantSet, crop: BoundingBox, source_key: str, event_index: int, field_type: FieldType
@@ -906,6 +1118,16 @@ class LocalMaintenanceImageRecognizer:
                 # El detector de tinta jamás aumenta la confianza ni acepta un valor.
                 has_visual_content = bool(ink_metrics and ink_metrics["has_content"])
                 if not date_candidates and not mileage_candidates and not has_visual_content:
+                    empty_date = evaluate_consensus(
+                        "date", date_candidates, attempted_variants=len(self.recognition_variants)
+                    )
+                    empty_mileage = evaluate_consensus(
+                        "mileage", mileage_candidates, attempted_variants=len(self.recognition_variants)
+                    )
+                    report["field_decisions"] = {
+                        "date": self._decision_payload(empty_date, date_attempts, requires_human_review=False),
+                        "mileage": self._decision_payload(empty_mileage, mileage_attempts, requires_human_review=False),
+                    }
                     continue
                 date_crop_id = self._save_crop(variants, region.date_crop, source_key, region_index, "date")
                 mileage_crop_id = self._save_crop(variants, region.mileage_crop, source_key, region_index, "mileage")
@@ -938,12 +1160,29 @@ class LocalMaintenanceImageRecognizer:
                     requires_human_review=requires_review,
                     warnings=warnings,
                     region=asdict(region.box),
+                    region_index=region_index,
                 )
                 events.append(event)
                 report["emitted_event"] = True
                 report["event_index"] = len(events)
                 report["initial_result"] = asdict(event)
+                report["field_decisions"] = {
+                    "date": self._decision_payload(
+                        recognized_date, date_attempts, requires_human_review=requires_review
+                    ),
+                    "mileage": self._decision_payload(
+                        recognized_mileage, mileage_attempts, requires_human_review=requires_review
+                    ),
+                }
                 event_report_indices.append(len(debug_regions) - 1)
+
+        if self.handwriting_recognizer._worker_device:
+            diagnostics.append(
+                "TrOCR local ejecutado en "
+                f"{self.handwriting_recognizer._worker_device}; carga del modelo: "
+                f"{self.handwriting_recognizer._model_load_seconds or 0.0:.4f} s."
+            )
+        self.handwriting_recognizer.close()
 
         final_events = list(events)
         previous_layout_date: date | None = None
@@ -968,6 +1207,7 @@ class LocalMaintenanceImageRecognizer:
                         "La fecha disminuye respecto al cuadro de servicio anterior en la página.",
                     ],
                     region=event.region,
+                    region_index=event.region_index,
                 )
             if current_layout_date is not None:
                 previous_layout_date = current_layout_date
@@ -991,6 +1231,7 @@ class LocalMaintenanceImageRecognizer:
                     requires_human_review=True,
                     warnings=[*event.warnings, "El kilometraje disminuye respecto al servicio cronológicamente anterior."],
                     region=event.region,
+                    region_index=event.region_index,
                 )
             if current is not None:
                 previous_mileage = current
@@ -999,7 +1240,17 @@ class LocalMaintenanceImageRecognizer:
             debug_regions[report_index]["final_result"] = asdict(final_events[event_index])
         debug.write_report({
             "source": str(source.resolve()),
-            "provider": self.ocr_backend.name,
+            "provider": (
+                f"{self.ocr_backend.name}+{self.handwriting_recognizer.name}"
+                if any(
+                    attempt.get("provider") == self.handwriting_recognizer.name
+                    for region in debug_regions
+                    for field_attempts in region.get("ocr_attempts", {}).values()
+                    for attempt in field_attempts
+                    if not attempt.get("error")
+                )
+                else self.ocr_backend.name
+            ),
             "boxes_detected": len(debug_regions),
             "detected_events": len(final_events),
             "regions": debug_regions,
@@ -1010,7 +1261,11 @@ class LocalMaintenanceImageRecognizer:
             diagnostics.append(f"Depuración OCR guardada en {debug.public_path}.")
         result = RecognitionResult(
             final_events,
-            self.ocr_backend.name,
+            (
+                f"{self.ocr_backend.name}+{self.handwriting_recognizer.name}"
+                if self.handwriting_recognizer._worker_device
+                else self.ocr_backend.name
+            ),
             diagnostics,
             debug_directory=debug.public_path,
         )

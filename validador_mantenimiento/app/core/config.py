@@ -21,6 +21,8 @@ OCR_MAX_FILE_SIZE_MB = int(os.getenv("OCR_MAX_FILE_SIZE_MB", "10"))
 OCR_MAX_IMAGES_PER_ANALYSIS = int(os.getenv("OCR_MAX_IMAGES_PER_ANALYSIS", "15"))
 OCR_MAX_IMAGE_PIXELS = int(os.getenv("OCR_MAX_IMAGE_PIXELS", "40000000"))
 HANDWRITING_MODEL_PATH = os.getenv("HANDWRITING_MODEL_PATH") or None
+HANDWRITING_PYTHON = os.getenv("HANDWRITING_PYTHON") or None
+HANDWRITING_TIMEOUT_SECONDS = float(os.getenv("HANDWRITING_TIMEOUT_SECONDS", "180"))
 
 
 def _environment_flag(name: str, default: bool = False) -> bool:

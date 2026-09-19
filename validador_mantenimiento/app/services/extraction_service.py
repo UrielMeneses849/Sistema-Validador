@@ -8,6 +8,8 @@ from tempfile import TemporaryDirectory
 from typing import Protocol
 
 from app.core.config import (
+    HANDWRITING_MODEL_PATH,
+    HANDWRITING_PYTHON,
     OCR_DEBUG,
     OCR_DEBUG_DIR,
     OCR_LANG,
@@ -18,6 +20,7 @@ from app.core.config import (
 from app.services.image_preprocessing import ImageValidationError, preprocess_image
 from app.services.maintenance_image_recognizer import (
     LocalMaintenanceImageRecognizer,
+    OptionalTrOcrFieldRecognizer,
     RecognitionPipeline,
     RecognizerUnavailableError,
     TesseractFieldOcrBackend,
@@ -173,12 +176,16 @@ class OcrExtractor:
         debug_enabled: bool = OCR_DEBUG,
         debug_directory: str | Path = OCR_DEBUG_DIR,
         debug_run_id: str | None = None,
+        handwriting_model_path: str | Path | None = HANDWRITING_MODEL_PATH,
+        handwriting_python: str | Path | None = HANDWRITING_PYTHON,
     ) -> None:
         self.language = language
         self.tesseract_cmd = tesseract_cmd
         self.debug_enabled = debug_enabled
         self.debug_directory = Path(debug_directory)
         self.debug_run_id = debug_run_id
+        self.handwriting_model_path = handwriting_model_path
+        self.handwriting_python = handwriting_python
 
     def _load_engine(self):
         executable = shutil.which(self.tesseract_cmd or "tesseract")
@@ -242,10 +249,15 @@ class OcrExtractor:
             )
         pytesseract = self._load_engine()
         if is_image:
+            handwriting_recognizer = OptionalTrOcrFieldRecognizer(
+                self.handwriting_model_path,
+                python_executable=self.handwriting_python,
+            )
             try:
                 recognition = RecognitionPipeline(
                     LocalMaintenanceImageRecognizer(
                         TesseractFieldOcrBackend(pytesseract, language=self.language),
+                        handwriting_recognizer=handwriting_recognizer,
                         debug_enabled=self.debug_enabled,
                         debug_directory=self.debug_directory,
                         debug_run_id=self.debug_run_id,
@@ -263,6 +275,8 @@ class OcrExtractor:
                         f"Tesseract no pudo cargar los idiomas {self.language}. Instala sus datos de idioma."
                     ) from exc
                 raise OcrProcessingError("Tesseract no pudo procesar la imagen especializada.") from exc
+            finally:
+                handwriting_recognizer.close()
 
             lines: list[str] = []
             warnings: list[str] = []

@@ -47,24 +47,47 @@ def main(argv: Sequence[str] | None = None) -> None:
         help="JSONL de benchmark; nunca se mezcla con training_data.",
     )
     parser.add_argument(
+        "--group",
+        default="development",
+        help="Grupo de fotografía completa, por ejemplo development o baseline; evita mezclar crops.",
+    )
+    parser.add_argument(
         "--event",
         action="append",
         nargs=2,
         metavar=("SERVICE_DATE", "MILEAGE_KM"),
         help="Evento no interactivo; se puede repetir y debe respetar el orden visual.",
     )
+    parser.add_argument(
+        "--region-event",
+        action="append",
+        nargs=3,
+        metavar=("REGION_INDEX", "SERVICE_DATE", "MILEAGE_KM"),
+        help="Evento verificado para un cuadro concreto; permite ground truth parcial sin inventar los demás.",
+    )
     args = parser.parse_args(argv)
 
+    if args.event and args.region_event:
+        parser.error("Usa --event para una página completa o --region-event para etiquetas parciales, no ambos.")
+
     try:
-        events = (
-            [normalize_ground_truth_event(service_date, mileage) for service_date, mileage in args.event]
-            if args.event
-            else collect_events()
-        )
+        if args.region_event:
+            events = [
+                normalize_ground_truth_event(service_date, mileage, region_index)
+                for region_index, service_date, mileage in args.region_event
+            ]
+        elif args.event:
+            events = [
+                normalize_ground_truth_event(service_date, mileage)
+                for service_date, mileage in args.event
+            ]
+        else:
+            events = collect_events()
         record, replaced = save_ground_truth(
             args.image,
             events,
             ground_truth_path=args.ground_truth,
+            group=args.group,
         )
     except ValueError as exc:
         parser.error(str(exc))
@@ -72,6 +95,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         "ground_truth": str(args.ground_truth.resolve()),
         "fixture_id": record["fixture_id"],
         "events": len(record["events"]),
+        "group": record["group"],
         "replaced": replaced,
     }, ensure_ascii=False))
 

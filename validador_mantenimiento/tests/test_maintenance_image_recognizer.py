@@ -23,6 +23,7 @@ from app.services.maintenance_image_recognizer import (
     evaluate_consensus,
     parse_date_candidates,
     parse_mileage_candidates,
+    parse_trocr_mileage_candidate,
 )
 from app.services.training_dataset_service import record_human_verified_event
 from training.export_dataset import split_by_page
@@ -70,6 +71,10 @@ def test_parsers_cover_expected_date_and_mileage_formats():
     assert parse_date_candidates("24/oct/2025")[0][0] == "2025-10-24"
     for raw in ("10,000", "10.000 km", "10000km", "36 389"):
         assert parse_mileage_candidates(raw)[0][0] in {10_000, 36_389}
+    assert parse_trocr_mileage_candidate("36389th")[0] == (36389, "36389", 0.72)
+    assert parse_trocr_mileage_candidate("folio 36389") == []
+    assert parse_trocr_mileage_candidate("3 References") == []
+    assert parse_trocr_mileage_candidate('" 4008695 1') == []
 
 
 def test_consensus_is_conservative_with_one_reading_and_strong_with_three():
@@ -86,6 +91,42 @@ def test_consensus_is_conservative_with_one_reading_and_strong_with_three():
     )
     assert one.confidence_score < 0.88
     assert three.confidence_score >= 0.88
+
+
+def test_cross_engine_consensus_boosts_agreement_but_conflict_requires_review():
+    tesseract = RecognitionCandidate("36389", 36389, 0.92, 1.0, "original", "tesseract")
+    agreement = evaluate_consensus(
+        "mileage",
+        [tesseract, replace(tesseract, provider="trocr_local", ocr_confidence=0.86)],
+        attempted_variants=6,
+    )
+    assert agreement.normalized_value == 36389
+    assert agreement.confidence_score >= 0.88
+    assert agreement.ambiguous is False
+    assert "coincidieron" in agreement.selection_reason
+
+    conflict = evaluate_consensus(
+        "mileage",
+        [tesseract, replace(tesseract, raw_text="36309", normalized_value=36309, provider="trocr_local")],
+        attempted_variants=6,
+    )
+    assert conflict.ambiguous is True
+    assert conflict.confidence_score <= 0.75
+    assert "distintos" in conflict.selection_reason
+
+
+def test_trocr_only_candidate_never_crosses_acceptance_threshold():
+    field = evaluate_consensus(
+        "date",
+        [
+            RecognitionCandidate("28/05/2025", "2025-05-28", 0.99, 1.0, variant, "trocr_local")
+            for variant in ("original", "grayscale", "high_contrast")
+        ],
+        attempted_variants=6,
+    )
+    assert field.normalized_value == "2025-05-28"
+    assert field.confidence_score < 0.88
+    assert "Sólo TrOCR" in field.selection_reason
 
 
 def test_generic_strategy_detects_multiple_service_boxes_and_pairs_labels():
@@ -177,6 +218,12 @@ def test_debug_mode_writes_visual_stages_crops_variants_and_raw_attempts(tmp_pat
         "original", "grayscale", "high_contrast", "adaptive_threshold", "shadow_normalized"
     }
     assert attempts["mileage"][0]["raw_text"] == "88913"
+    decision = report["regions"][0]["field_decisions"]["mileage"]
+    assert decision["selected_candidate"] == 88913
+    assert decision["selection_reason"]
+    assert decision["tesseract_candidates"]
+    assert decision["trocr_candidates"] == []
+    assert decision["requires_human_review"] is False
 
 
 def test_disabled_debug_mode_creates_no_debug_directory(tmp_path):
