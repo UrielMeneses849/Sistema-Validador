@@ -25,13 +25,16 @@ def get_service_event_or_raise(db: Session, event_id: int) -> ServiceEvent:
     return event
 
 
-def apply_vehicle_consistency_review(db: Session, vehicle_id: int) -> None:
+def apply_vehicle_consistency_review(
+    db: Session, vehicle_id: int, event_ids: set[int] | None = None
+) -> None:
     """Marca regresiones, nunca cambia fecha/km ni usa coherencia para inventar lecturas."""
+    query = select(ServiceEvent).where(ServiceEvent.vehicle_id == vehicle_id)
+    if event_ids is not None:
+        query = query.where(ServiceEvent.id.in_(event_ids))
     events = list(
         db.scalars(
-            select(ServiceEvent)
-            .where(ServiceEvent.vehicle_id == vehicle_id)
-            .order_by(
+            query.order_by(
                 ServiceEvent.service_date.is_(None),
                 ServiceEvent.service_date,
                 ServiceEvent.mileage_km,
@@ -172,7 +175,9 @@ def confirm_service_event(db: Session, event_id: int) -> ServiceEventRead:
     )
 
 
-def create_manual_service_event(db: Session, payload: ManualServiceEventCreate) -> ServiceEventRead:
+def create_manual_service_event(
+    db: Session, payload: ManualServiceEventCreate, *, persist: bool = True
+) -> ServiceEventRead:
     """Fallback de corrección humana que conserva el mismo modelo/timeline."""
     document: Document = get_document_or_raise(db, payload.document_id)
     text = f"{payload.service_type or ''} {payload.description or ''}".upper()
@@ -208,6 +213,9 @@ def create_manual_service_event(db: Session, payload: ManualServiceEventCreate) 
         warnings=[] if resets and payload.service_date and payload.mileage_km is not None else ["Datos manuales incompletos o sin clasificación."],
     )
     db.add(event)
-    db.commit()
+    if persist:
+        db.commit()
+    else:
+        db.flush()
     db.refresh(event)
     return ServiceEventRead.model_validate(event)

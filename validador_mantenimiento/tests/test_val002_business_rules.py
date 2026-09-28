@@ -397,12 +397,14 @@ def test_event_marked_reset_but_not_preventive_does_not_restart_interval(client:
         assert assess_service_event(db, current).previous.source == "contract_start"
 
 
-def test_unconfirmed_event_that_requires_review_is_not_an_eligible_baseline(client: TestClient):
+def test_event_that_requires_review_remains_an_eligible_baseline_with_valid_fields(
+    client: TestClient,
+):
     from app.database.database import SessionLocal
 
     with SessionLocal() as db:
         vehicle = create_vehicle(db)
-        create_event(
+        previous = create_event(
             db,
             vehicle,
             when=date(2026, 3, 1),
@@ -412,8 +414,10 @@ def test_unconfirmed_event_that_requires_review_is_not_an_eligible_baseline(clie
         current = create_event(db, vehicle, when=date(2026, 6, 1), mileage=49_000)
 
         assessment = assess_service_event(db, current)
-        assert assessment.service_sequence == "first"
-        assert assessment.previous.source == "contract_start"
+        assert assessment.service_sequence == "subsequent"
+        assert assessment.previous.source == "service_event"
+        assert assessment.previous.source_id == previous.id
+        assert assessment.delta_km == 4_000
 
 
 def test_early_service_is_valid(client: TestClient):

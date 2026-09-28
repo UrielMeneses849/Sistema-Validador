@@ -114,6 +114,9 @@ def analyze_document(
     *,
     force: bool = False,
     extractor: DocumentExtractor | None = None,
+    persist: bool = True,
+    detect_duplicates: bool = True,
+    review_vehicle_history: bool = True,
 ) -> DocumentAnalysisRead:
     """Extrae el archivo original; `force` sólo reemplaza resultados automáticos no confirmados."""
     document = get_document_or_raise(db, document_id)
@@ -169,7 +172,7 @@ def analyze_document(
             parsed_event=parsed_event,
             document_fields=document_fields,
         )
-        duplicate = _find_duplicate_event(db, event)
+        duplicate = _find_duplicate_event(db, event) if detect_duplicates else None
         if duplicate:
             analysis.warnings = [
                 *analysis.warnings,
@@ -181,8 +184,12 @@ def analyze_document(
         db.flush()
         persisted_events.append(event)
 
-    apply_vehicle_consistency_review(db, document.vehicle_id)
-    db.commit()
+    if review_vehicle_history:
+        apply_vehicle_consistency_review(db, document.vehicle_id)
+    if persist:
+        db.commit()
+    else:
+        db.flush()
     db.refresh(analysis)
     for event in persisted_events:
         db.refresh(event)

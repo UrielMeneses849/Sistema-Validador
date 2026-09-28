@@ -44,10 +44,6 @@ function resultMarkup(item, includeAudit = false) {
 }
 window.resultMarkup = resultMarkup
 
-function extractedValue(fields, name) {
-  return fields?.[name]?.normalized_value ?? fields?.[name]?.raw_value ?? null
-}
-
 function historyStatus(status) {
   if (status === "COMPLIANT") return { label: "EN REGLA", tone: "ok" }
   if (status === "TOLERANCE_PERIOD") return { label: "PERIODO DE TOLERANCIA", tone: "tolerance" }
@@ -66,52 +62,18 @@ function policyLabel(history) {
 
 function signedKilometers(value) {
   if (value === null || value === undefined) return "—"
-  const sign = Number(value) >= 0 ? "+" : "−"
+  const sign = Number(value) < 0 ? "−" : ""
   return `${sign}${Math.abs(Number(value)).toLocaleString("es-MX")} km`
 }
 
-function documentDetailMarkup(row) {
+function documentLinkMarkup(row, pdfUrl = null) {
   const document = row.document || {}
-  const event = row.service_event || {}
-  const fields = document.extracted_fields || {}
-  const vin = extractedValue(fields, "vin") || "—"
-  const plates = extractedValue(fields, "plates") || "—"
-  const invoice = extractedValue(fields, "invoice_number") || event.repair_order_number || "—"
-  const confidence = event.confidence === "high" ? "Alta" : event.confidence === "medium" ? "Media" : "Baja"
-  const evidence = JSON.stringify(event.field_evidence || {}, null, 2)
-  const correctable = event.requires_human_review
-    || !event.service_date
-    || event.mileage_km === null
-    || row.validation?.reasons?.some((reason) => reason.includes("inconsistency") || reason.includes("anterior a la fecha"))
-  const correction = correctable ? `<form class="history-correction" data-event-id="${event.id}">
-      <h4>Confirmar o corregir datos</h4>
-      <div class="history-correction-fields">
-        <label>Fecha del servicio<input name="service_date" type="date" value="${UI.escape(event.service_date || "")}" required></label>
-        <label>Kilometraje<input name="mileage_km" type="number" min="0" step="1" value="${event.mileage_km ?? ""}" required></label>
-        <button class="button button-primary button-small" type="submit">Confirmar y recalcular</button>
-      </div>
-    </form>` : ""
-  return `<details class="history-document-details">
-    <summary>Ver detalles del documento</summary>
-    <div class="history-document-grid">
-      <div><span>Archivo</span><strong>${UI.escape(document.original_filename || "—")}</strong></div>
-      <div><span>VIN</span><strong>${UI.escape(vin)}</strong></div>
-      <div><span>Placas</span><strong>${UI.escape(plates)}</strong></div>
-      <div><span>Proveedor</span><strong>${UI.escape(event.dealer || "—")}</strong></div>
-      <div><span>Factura / orden</span><strong>${UI.escape(invoice)}</strong></div>
-      <div><span>Método</span><strong>${UI.escape(document.extraction_method || event.extraction_method || "—")}</strong></div>
-      <div><span>Confianza del evento</span><strong>${confidence}</strong></div>
-      <div><span>Tipo documental</span><strong>${UI.escape(document.document_type || "—")}</strong></div>
-      <div class="history-detail-full"><span>Servicio detectado</span><strong>${UI.escape(event.service_type || event.description || "—")}</strong></div>
-      <div class="history-detail-full"><span>Descripción</span><strong>${UI.escape(event.description || "—")}</strong></div>
-    </div>
-    ${document.warnings?.length ? `<p class="history-document-warning">${document.warnings.map(UI.escape).join(" · ")}</p>` : ""}
-    ${correction}
-    <details class="history-raw-evidence"><summary>Ver texto y evidencia técnica</summary><p>${UI.escape(document.extracted_text || "Sin texto extraído.")}</p><pre>${UI.escape(evidence)}</pre></details>
-  </details>`
+  const href = pdfUrl || (document.id ? `/api/documents/${document.id}/file` : null)
+  if (!href) return "—"
+  return `<a class="history-document-link" href="${UI.escape(href)}" target="_blank" rel="noopener noreferrer" title="${UI.escape(document.original_filename || "Documento PDF")}">↗ Abrir documento PDF</a>`
 }
 
-function historyRowMarkup(row) {
+function historyRowMarkup(row, pdfUrl = null) {
   const event = row.service_event
   const state = historyStatus(row.validation.status)
   return `<tr class="history-row history-row-${state.tone}">
@@ -120,11 +82,11 @@ function historyRowMarkup(row) {
     <td>${UI.escape(row.elapsed_time || "Por confirmar")}</td>
     <td>${signedKilometers(row.delta_km)}</td>
     <td><span class="history-status history-status-${state.tone}">${state.label}</span></td>
-    <td>${documentDetailMarkup(row)}</td>
+    <td>${documentLinkMarkup(row, pdfUrl)}</td>
   </tr>`
 }
 
-function renderHistory(history) {
+function renderHistory(history, pdfUrls = new Map()) {
   const result = document.querySelector("#history-result")
   const body = document.querySelector("#history-timeline-body")
   const baseline = history.baseline || {}
@@ -136,7 +98,7 @@ function renderHistory(history) {
       <td>—</td>
       <td><span class="history-status history-status-reference">REFERENCIA</span></td>
       <td>—</td>
-    </tr>${history.rows.map(historyRowMarkup).join("")}`
+    </tr>${history.rows.map((row) => historyRowMarkup(row, pdfUrls.get(row.document?.id))).join("")}`
 
   const summary = history.summary
   const summaryTone = summary.result === "COMPLIANT" ? "ok" : summary.result === "TOLERANCE_PERIOD" ? "tolerance" : summary.result === "NON_COMPLIANT" ? "bad" : "review"
@@ -146,6 +108,7 @@ function renderHistory(history) {
       <span class="history-status history-status-${summaryTone}">${summaryLabel}</span>
     </div>
     <p class="history-summary-policy"><strong>Política:</strong> ${UI.escape(policyLabel(history))}</p>
+    ${history.ephemeral ? '<p class="history-summary-policy"><strong>Prueba temporal:</strong> los PDF y sus resultados no se guardaron en el historial del vehículo.</p>' : ""}
     <div class="history-summary-counts">
       <div><span>Servicios analizados</span><strong>${summary.services_analyzed}</strong></div>
       <div><span>En regla</span><strong>${summary.compliant}</strong></div>
@@ -171,7 +134,12 @@ if (validationForm) {
   const progressCount = document.querySelector("#history-progress-count")
   const progressBar = document.querySelector("#history-progress-bar")
   const historyResult = document.querySelector("#history-result")
-  const state = { items: [], vehicleId: null, processing: false, history: null }
+  const state = { items: [], vehicleId: null, processing: false, history: null, pdfUrls: new Map() }
+
+  function clearPdfUrls() {
+    new Set(state.pdfUrls.values()).forEach((url) => URL.revokeObjectURL(url))
+    state.pdfUrls.clear()
+  }
 
   function fileKey(file) {
     return `${file.name}:${file.size}:${file.lastModified}`
@@ -207,6 +175,8 @@ if (validationForm) {
   }
 
   function addFiles(files) {
+    clearPdfUrls()
+    state.history = null
     const existing = new Set(state.items.map((item) => item.key))
     const rejected = []
     Array.from(files).forEach((file) => {
@@ -224,44 +194,30 @@ if (validationForm) {
     renderFiles()
   }
 
-  async function analyzeItem(item, vehicleId) {
-    item.status = "uploading"
-    item.error = null
-    renderFiles()
-    try {
-      if (!item.document) item.document = await API.upload(vehicleId, item.file)
-      if (!item.analysis) item.analysis = await API.post(`/documents/${item.document.id}/analyze`, {})
-      item.events = item.analysis.service_events || []
-      if (!item.events.length) {
-        const fallback = await API.post("/service-events", {
-          document_id: item.document.id,
-          service_type: "Mantenimiento preventivo",
-          description: "Evento pendiente de confirmación manual",
-          resets_maintenance_interval: true,
-        })
-        item.events = [fallback]
-      }
-      item.status = "analyzed"
-    } catch (error) {
-      item.status = "error"
-      item.error = error.message
-    }
-    renderFiles()
-  }
-
-  function eventIds() {
-    return [...new Set(state.items.filter((item) => item.status === "analyzed").flatMap((item) => item.events.map((event) => event.id)))]
-  }
-
-  async function refreshHistory({ announce = true } = {}) {
-    const ids = eventIds()
-    if (!ids.length) throw new Error("No fue posible extraer eventos de los documentos seleccionados.")
-    state.history = await API.post("/history-validations", {
-      vehicle_id: Number(vehicleSelect.value),
-      event_ids: ids,
+  async function previewHistory() {
+    const form = new FormData()
+    form.append("vehicle_id", vehicleSelect.value)
+    state.items.forEach((item) => {
+      item.status = "uploading"
+      item.error = null
+      form.append("files", item.file)
     })
-    renderHistory(state.history)
-    if (announce) UI.notice(validationNotice, "Historial completo analizado y ordenado cronológicamente.", "success")
+    renderFiles()
+    state.history = await API.request("/history-validations/preview", {
+      method: "POST",
+      body: form,
+    })
+    clearPdfUrls()
+    state.items.forEach((item, index) => {
+      const pdfBlob = item.file.slice(0, item.file.size, "application/pdf")
+      const documentId = state.history.preview_document_ids?.[index]
+      if (documentId) state.pdfUrls.set(documentId, URL.createObjectURL(pdfBlob))
+    })
+    renderHistory(state.history, state.pdfUrls)
+    progressBar.value = state.items.length
+    state.items = []
+    renderFiles()
+    UI.notice(validationNotice, "Prueba terminada. Los PDF y el resultado no se guardaron; puedes cargarlos nuevamente.", "success")
   }
 
   fileInput.addEventListener("change", (event) => {
@@ -289,6 +245,7 @@ if (validationForm) {
   vehicleSelect.addEventListener("change", () => {
     const nextVehicleId = vehicleSelect.value || null
     if (state.vehicleId && state.vehicleId !== nextVehicleId) {
+      clearPdfUrls()
       state.items = []
       state.history = null
       historyResult.classList.add("hidden")
@@ -313,23 +270,18 @@ if (validationForm) {
     state.vehicleId = vehicleSelect.value
     syncAnalyzeButton()
     progress.classList.remove("hidden")
-    progressBar.max = state.items.filter((item) => item.status !== "analyzed").length || 1
+    progressBar.max = state.items.length || 1
     progressBar.value = 0
-    UI.notice(validationNotice, "Analizando todos los documentos antes de construir la línea temporal…", "info")
+    progressLabel.textContent = `Analizando ${state.items.length} PDF${state.items.length === 1 ? "" : "s"}`
+    progressCount.textContent = "Prueba temporal"
+    UI.notice(validationNotice, "Analizando los documentos en modo temporal…", "info")
     try {
-      const pending = state.items.filter((item) => item.status !== "analyzed")
-      for (let index = 0; index < pending.length; index += 1) {
-        progressLabel.textContent = `Analizando ${pending[index].file.name}`
-        progressCount.textContent = `${index + 1} de ${pending.length}`
-        await analyzeItem(pending[index], Number(vehicleSelect.value))
-        progressBar.value = index + 1
-      }
-      progressLabel.textContent = "Construyendo línea temporal consolidada"
-      progressCount.textContent = ""
-      await refreshHistory()
-      const failed = state.items.filter((item) => item.status === "error").length
-      if (failed) UI.notice(validationNotice, `El historial se calculó, pero ${failed} documento${failed === 1 ? "" : "s"} no pudieron analizarse. Puedes reintentarlos.`, "error")
+      await previewHistory()
     } catch (error) {
+      state.items.forEach((item) => {
+        item.status = "error"
+        item.error = error.message
+      })
       UI.notice(validationNotice, error.message, "error")
     } finally {
       state.processing = false
@@ -339,26 +291,7 @@ if (validationForm) {
     }
   })
 
-  historyResult.addEventListener("submit", async (event) => {
-    const form = event.target.closest("form.history-correction")
-    if (!form) return
-    event.preventDefault()
-    const submit = form.querySelector("button[type='submit']")
-    const data = new FormData(form)
-    submit.disabled = true
-    try {
-      await API.put(`/service-events/${form.dataset.eventId}`, {
-        service_date: data.get("service_date"),
-        mileage_km: Number(data.get("mileage_km")),
-      })
-      await refreshHistory({ announce: false })
-      UI.notice(validationNotice, "Datos confirmados. Se recalculó la línea temporal completa.", "success")
-    } catch (error) {
-      UI.notice(validationNotice, error.message, "error")
-      submit.disabled = false
-    }
-  })
-
   UI.vehicleOptions(vehicleSelect).then(syncAnalyzeButton).catch((error) => UI.notice(validationNotice, error.message, "error"))
+  window.addEventListener("beforeunload", clearPdfUrls)
   renderFiles()
 }

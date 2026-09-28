@@ -12,12 +12,17 @@ const deleteForm = document.querySelector("#vehicle-delete-form")
 const deleteCancel = document.querySelector("#cancel-vehicle-delete")
 const deleteConfirm = document.querySelector("#confirm-vehicle-delete")
 const deleteError = document.querySelector("#vehicle-delete-error")
+const contractPdfInput = document.querySelector("#contract-pdf")
+const contractUploadLabel = document.querySelector("#contract-upload-label")
+const contractUploadStatus = document.querySelector("#contract-upload-status")
 let vehicles = []
 let listedVehicles = []
 let manufacturerRules = []
 let editingVehicleId = null
 let pendingDeleteVehicleId = null
 let contractRequest = 0
+let contractExtractionRequest = 0
+let extractedContractNumber = null
 
 const requiredFields = {
   vehicle_condition: "Condición del vehículo",
@@ -108,6 +113,11 @@ function showNotice(message, type = "info") {
 function clearNotice() {
   vehicleNotice.textContent = ""
   vehicleNotice.className = "notice"
+}
+
+function showContractUploadStatus(message = "", type = "") {
+  contractUploadStatus.textContent = message
+  contractUploadStatus.className = `contract-upload-status${type ? ` ${type}` : ""}`
 }
 
 function vehicleMileage(record) {
@@ -228,7 +238,12 @@ async function setNewContract() {
 
 async function resetForm({ clearMessage = true } = {}) {
   editingVehicleId = null
+  extractedContractNumber = null
+  contractExtractionRequest += 1
   vehicleForm.reset()
+  contractPdfInput.disabled = false
+  contractUploadLabel.textContent = "Seleccionar contrato PDF"
+  showContractUploadStatus()
   vehicleForm.elements.initial_odometer.readOnly = false
   clearFieldErrors()
   document.querySelector("#vehicle-form-title").textContent = "Registrar vehículo"
@@ -330,6 +345,75 @@ function vehiclePayload(values, { includeContract = false } = {}) {
   return payload
 }
 
+async function extractContractFromPdf(file) {
+  const requestId = ++contractExtractionRequest
+  extractedContractNumber = null
+  contractRequest += 1
+  contractPdfInput.disabled = true
+  contractUploadLabel.textContent = file.name
+  showContractUploadStatus("Leyendo los datos del contrato…", "loading")
+
+  try {
+    const result = await API.extractContract(file)
+    if (requestId !== contractExtractionRequest) return
+    const contract = sixDigitValue(result?.numero_contrato)
+    const dates = [
+      result?.fecha_factura_origen,
+      result?.fecha_inicio_contrato,
+      result?.fecha_fin_contrato,
+    ]
+    const initialOdometer = Number(result?.initial_odometer)
+    if (
+      !contract
+      || dates.some((value) => !isValidDate(value))
+      || !["new", "used"].includes(result?.vehicle_condition)
+      || !normalizeText(result?.brand)
+      || !normalizeText(result?.model)
+      || !Number.isInteger(initialOdometer)
+      || initialOdometer < 0
+    ) {
+      throw new Error("El contrato no devolvió todos los datos requeridos.")
+    }
+
+    vehicleForm.elements.vehicle_condition.value = result.vehicle_condition
+    updateBrandField()
+    if (result.vehicle_condition === "new") {
+      const matchingRule = manufacturerRules.find(
+        (rule) => normalizeText(rule.brand).localeCompare(
+          normalizeText(result.brand),
+          "es-MX",
+          { sensitivity: "base" },
+        ) === 0,
+      )
+      if (!matchingRule) {
+        throw new Error(`No existe una política activa para la marca ${result.brand}.`)
+      }
+      vehicleForm.elements.brand_policy.value = matchingRule.brand
+    } else {
+      vehicleForm.elements.brand.value = result.brand
+    }
+    vehicleForm.elements.model.value = result.model
+    vehicleForm.elements.initial_odometer.value = initialOdometer
+    vehicleForm.elements.numero_contrato.value = contract
+    vehicleForm.elements.fecha_factura_origen.value = result.fecha_factura_origen
+    vehicleForm.elements.fecha_inicio_contrato.value = result.fecha_inicio_contrato
+    vehicleForm.elements.fecha_fin_contrato.value = result.fecha_fin_contrato
+    extractedContractNumber = contract
+    clearFieldErrors()
+    showContractUploadStatus(
+      `Contrato ${contract} leído: ${initialOdometer.toLocaleString("es-MX")} km iniciales. Captura únicamente el kilometraje actual.`,
+      "success",
+    )
+  } catch (error) {
+    if (requestId !== contractExtractionRequest) return
+    contractUploadLabel.textContent = "Seleccionar otro contrato PDF"
+    showContractUploadStatus(error.message, "error")
+    await setNewContract()
+  } finally {
+    if (requestId === contractExtractionRequest) contractPdfInput.disabled = false
+  }
+}
+
 function isImportableLegacyVehicle(record) {
   const values = {
     brand: normalizeText(record?.brand),
@@ -400,7 +484,13 @@ function startEditing(vehicleId) {
   }
 
   editingVehicleId = vehicleId
+  extractedContractNumber = null
+  contractExtractionRequest += 1
   contractRequest += 1
+  contractPdfInput.value = ""
+  contractPdfInput.disabled = true
+  contractUploadLabel.textContent = "Carga disponible al registrar un vehículo"
+  showContractUploadStatus("El contrato no se reemplaza durante la edición.")
   clearFieldErrors()
   vehicleForm.elements.vehicle_condition.value = ["new", "used"].includes(vehicle?.vehicle_condition)
     ? vehicle.vehicle_condition
@@ -459,7 +549,10 @@ vehicleForm.addEventListener("submit", async (event) => {
   try {
     const saved = isEditing
       ? await API.put(`/vehicles/${editingVehicleId}`, vehiclePayload(values))
-      : await API.post("/vehicles", vehiclePayload(values))
+      : await API.post(
+        "/vehicles",
+        vehiclePayload(values, { includeContract: extractedContractNumber === values.numero_contrato }),
+      )
     await loadVehicles({ announceError: false })
     await resetForm({ clearMessage: false })
     const savedContract = contractNumberOf(saved) || values.numero_contrato
@@ -496,7 +589,7 @@ deleteForm.addEventListener("submit", async (event) => {
     applySearch()
     if (editingVehicleId === vehicleId) await resetForm({ clearMessage: false })
     closeDeleteDialog()
-    showNotice("Vehículo eliminado correctamente.", "success")
+    showNotice("Vehículo y datos asociados eliminados correctamente.", "success")
   } catch (error) {
     deleteError.textContent = error.message
     deleteError.className = "notice error show"
@@ -523,6 +616,18 @@ document.querySelector("#cancel-edit").addEventListener("click", async () => {
 vehicleForm.addEventListener("input", (event) => {
   if (typeof event.target.setCustomValidity === "function") event.target.setCustomValidity("")
   if (event.target.name === "vehicle_condition") updateBrandField()
+})
+
+contractPdfInput.addEventListener("change", async () => {
+  const [file] = contractPdfInput.files
+  if (!file) {
+    extractedContractNumber = null
+    contractUploadLabel.textContent = "Seleccionar contrato PDF"
+    showContractUploadStatus()
+    await setNewContract()
+    return
+  }
+  await extractContractFromPdf(file)
 })
 
 async function initializeVehiclesPage() {

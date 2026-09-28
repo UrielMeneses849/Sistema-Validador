@@ -1,12 +1,19 @@
 from __future__ import annotations
 
+from datetime import date
 from io import BytesIO
 
 import pytest
 from fastapi.testclient import TestClient
 from PIL import Image
 
-from app.services.document_parser import extract_mileage, parse_document
+from app.services.document_parser import (
+    classify_service_event,
+    extract_mileage,
+    extract_spatial_date,
+    extract_spatial_mileage,
+    parse_document,
+)
 from app.services.extraction_service import ExtractedPage, ExtractionResult, LayoutWord, OcrUnavailableError
 from app.services.image_preprocessing import ImageValidationError, inspect_image_content, preprocess_image
 
@@ -35,12 +42,84 @@ def test_mileage_formats_require_semantic_context(raw: str):
 
 
 @pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("KMS: 117658", 117658),
+        ("Kms. 46145", 46145),
+        ("KM: 34731", 34731),
+        ("Kms. 93952", 93952),
+        ("KM: 105849", 105849),
+    ],
+)
+def test_mileage_accepts_km_and_kms_labels(text: str, expected: int):
+    field = extract_mileage([(1, text)])
+    assert field.normalized_value == expected
+    assert field.confidence_score >= 0.88
+
+
+def test_kms_column_is_spatially_linked_to_value_below():
+    words = [
+        LayoutWord("Kms.", 1, 396.5, 413.5, 199.9, 206.8),
+        LayoutWord("46145", 1, 396.5, 416.4, 211.5, 218.6),
+        LayoutWord("Asesor", 1, 470.0, 500.0, 199.9, 206.8),
+    ]
+    field = extract_spatial_mileage(words)
+    assert field.normalized_value == 46145
+    assert field.confidence_score >= 0.88
+
+
+def test_repeated_service_date_outweighs_single_document_date():
+    words = [
+        LayoutWord("Fecha", 1, 480.0, 515.0, 50.0, 57.0),
+        LayoutWord("13/12/2024", 1, 522.0, 557.0, 50.0, 57.0),
+        LayoutWord("Fecha", 1, 70.0, 110.0, 292.0, 299.0),
+        LayoutWord("12/12/2024", 1, 120.0, 155.0, 292.0, 299.0),
+        LayoutWord("Fecha", 2, 110.0, 163.0, 188.0, 195.0),
+        LayoutWord("12/12/2024", 2, 173.0, 208.0, 188.0, 195.0),
+    ]
+
+    field = extract_spatial_date(words)
+
+    assert field.normalized_value == date(2024, 12, 12)
+    assert field.confidence == "high"
+    assert field.ambiguous is False
+
+
+def test_scheduled_service_kms_is_not_used_as_actual_odometer():
+    field = extract_mileage([(1, "Servicio de Mantenimiento de 6,000 Kms.")])
+    assert field.normalized_value is None
+
+
+@pytest.mark.parametrize(
+    "description",
+    [
+        "1.35 SERVICIO DE 12,000 KM UNIDAD DE SERVICIO",
+        "Unidad de servicio E48 S24SILVERADO 2.7 4X4 24",
+        "Unidad de servicio E48 S36SILVERADO 2.7 4X4 24",
+    ],
+)
+def test_dealer_scheduled_service_descriptions_restart_interval(description: str):
+    category, service_type, resets, review, warnings = classify_service_event(
+        works=[],
+        description=description,
+        document_type="comprobante_servicio",
+    )
+
+    assert category == "preventive_maintenance"
+    assert service_type == "Mantenimiento preventivo"
+    assert resets is True
+    assert review is False
+    assert warnings == []
+
+
+@pytest.mark.parametrize(
     ("raw", "expected"),
     [
         ("7 de enero de 2024", "2024-01-07"),
         ("07-febrero-2024", "2024-02-07"),
         ("07.02.2024", "2024-02-07"),
         ("07/02/24", "2024-02-07"),
+        ("2024-07-03T16:19:00", "2024-07-03"),
     ],
 )
 def test_spanish_and_numeric_date_formats(raw: str, expected: str | None):
@@ -63,6 +142,30 @@ def test_multiple_dates_are_preserved_as_candidates_and_require_review():
     assert event.service_date.ambiguous is True
     assert len(event.service_date.candidates) == 2
     assert event.requires_human_review is True
+
+
+def test_invoice_iso_issue_and_stamping_timestamps_resolve_to_the_same_date():
+    parsed = parse_document(ExtractionResult(
+        method="pdf_text",
+        pages=[ExtractedPage(
+            1,
+            "Lugar y Fecha de Expedición\n"
+            "SAN FRANCISCO DE CAMPECHE CAMP,\n"
+            "2024-07-03T16:19:00\n"
+            "Kilometraje 11,695\n"
+            "SERVICIO DE 12,000 KM\n"
+            "Fecha de timbrado del CFDI: 2024-07-03T17:24:13",
+        )],
+        has_usable_text=True,
+    ))
+
+    event = parsed.service_events[0]
+    assert event.service_date.normalized_value == date(2024, 7, 3)
+    assert event.service_category == "preventive_maintenance"
+    assert event.resets_maintenance_interval is True
+    assert event.requires_human_review is False
+    assert event.service_date.raw_value == "2024-07-03T16:19:00"
+    assert event.service_date.ambiguous is False
 
 
 def test_low_token_confidence_does_not_become_high_document_confidence():

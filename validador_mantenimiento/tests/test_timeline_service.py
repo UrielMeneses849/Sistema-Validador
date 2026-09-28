@@ -122,4 +122,36 @@ def test_exceeded_mileage_time_and_regressive_cases(client):
         reverse = create_event(db, vehicle_reverse, date(2024, 5, 10), 15000)
         assessment = assess_service_event(db, reverse)
         assert assessment.status == "REQUIRES_REVIEW"
+        assert assessment.delta_km == -5_000
         assert "possible_mileage_inconsistency" in assessment.reasons
+
+
+def test_reviewed_events_keep_interval_math_and_can_be_previous_reference(client):
+    from app.database.database import SessionLocal
+
+    with SessionLocal() as db:
+        vehicle = create_vehicle(db)
+        vehicle.initial_odometer = 5_000
+        db.commit()
+
+        first = create_event(db, vehicle, date(2024, 12, 12), 9_905)
+        first.requires_human_review = True
+        first.warnings = ["Confirmar clasificación general del servicio."]
+        db.commit()
+
+        first_assessment = assess_service_event(db, first)
+        assert first_assessment.status == "REQUIRES_REVIEW"
+        assert first_assessment.previous is not None
+        assert first_assessment.previous.source == "contract_start"
+        assert first_assessment.delta_km == 4_905
+
+        second = create_event(db, vehicle, date(2026, 9, 7), 50_640)
+        second.requires_human_review = True
+        second.warnings = ["Confirmar clasificación general del servicio."]
+        db.commit()
+
+        second_assessment = assess_service_event(db, second)
+        assert second_assessment.status == "REQUIRES_REVIEW"
+        assert second_assessment.previous is not None
+        assert second_assessment.previous.source_id == first.id
+        assert second_assessment.delta_km == 40_735

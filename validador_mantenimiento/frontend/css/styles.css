@@ -127,23 +127,8 @@ textarea { min-height: 84px; resize: vertical; } input:focus, select:focus, text
 .history-status-bad { color: var(--danger); background: var(--danger-soft); }
 .history-status-review { color: #8a5200; background: #fff1d6; }
 .history-status-reference { color: #475467; background: #eef1f4; }
-.history-document-details { min-width: 195px; }
-.history-document-details > summary, .history-raw-evidence > summary { color: #086c78; font-size: 11px; font-weight: 700; cursor: pointer; }
-.history-document-details[open] { min-width: 510px; }
-.history-document-grid { margin-top: 12px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1px; overflow: hidden; background: var(--line); border: 1px solid var(--line); border-radius: 7px; }
-.history-document-grid > div { padding: 9px; background: white; }
-.history-document-grid span { display: block; margin-bottom: 3px; color: var(--muted); font-size: 9px; text-transform: uppercase; letter-spacing: .04em; }
-.history-document-grid strong { display: block; color: #344054; font-size: 11px; overflow-wrap: anywhere; }
-.history-detail-full { grid-column: 1 / -1; }
-.history-document-warning { margin: 9px 0 0; padding: 8px; color: #8a5200; background: #fff8e8; border-radius: 6px; font-size: 10px; line-height: 1.45; }
-.history-correction { margin-top: 10px; padding: 11px; background: #fffcf5; border: 1px solid #ecd39d; border-radius: 7px; }
-.history-correction h4 { margin: 0 0 9px; color: #694900; font-size: 11px; }
-.history-correction-fields { display: grid; grid-template-columns: 1fr 1fr auto; align-items: end; gap: 8px; }
-.history-correction-fields label { font-size: 10px; }
-.history-correction-fields input { margin-top: 4px; min-height: 34px; padding: 6px 8px; font-size: 11px; }
-.history-correction-fields .button { min-height: 34px; }
-.history-raw-evidence { margin-top: 10px; }
-.history-raw-evidence p, .history-raw-evidence pre { max-height: 180px; margin: 8px 0 0; padding: 9px; overflow: auto; color: #475467; background: #f8fafb; border-radius: 6px; font-size: 9px; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; }
+.history-document-link { display: inline-flex; align-items: center; min-width: 160px; color: #086c78; font-size: 11px; font-weight: 700; text-decoration: none; }
+.history-document-link:hover { color: #064f58; text-decoration: underline; }
 .history-summary { margin-top: 18px !important; }
 .history-summary-heading { display: flex; justify-content: space-between; align-items: flex-start; gap: 18px; }
 .history-summary-heading h3 { max-width: 780px; margin: 0; color: #26354a; font-size: 15px; line-height: 1.5; }
@@ -159,8 +144,6 @@ textarea { min-height: 84px; resize: vertical; } input:focus, select:focus, text
   .history-upload-actions, .history-result-heading, .history-summary-heading { flex-direction: column; }
   .history-upload-actions .button { width: 100%; }
   .history-summary-counts { grid-template-columns: repeat(2, 1fr); }
-  .history-document-details[open] { min-width: 400px; }
-  .history-correction-fields { grid-template-columns: 1fr; }
 }
 .form-actions { display: flex; gap: 9px; margin-top: 19px; }.hint { font-size: 11px; line-height: 1.45; color: #667085; margin: 0; }
 .upload-zone { display: block; padding: 23px; text-align: center; border: 1.5px dashed #9bb6c5; border-radius: 9px; background: #f9fcfc; color: #344054; cursor: pointer; }.upload-zone:hover { border-color: var(--teal); background: var(--teal-soft); }.upload-zone input { display: none; }.upload-icon { font-size: 25px; display: block; margin-bottom: 7px; }.upload-zone strong { font-size: 13px; }.upload-zone small { color: var(--muted); display: block; margin-top: 4px; font-size: 11px; }
@@ -330,6 +313,12 @@ textarea { min-height: 84px; resize: vertical; } input:focus, select:focus, text
 .vehicle-form-section-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
 .vehicle-form-section-heading h3 { margin: 0; color: #26354a; font-size: 13px; }
 .vehicle-form-section-heading p { margin: 4px 0 0; color: var(--muted); font-size: 11px; line-height: 1.45; }
+.contract-upload-section { background: #f7fffe; border-color: #b9e7e0; }
+.contract-upload-zone { padding: 18px; }
+.contract-upload-status { min-height: 18px; margin-top: 9px; color: var(--muted); font-size: 11px; line-height: 1.45; }
+.contract-upload-status.loading { color: var(--primary); }
+.contract-upload-status.success { color: var(--success); font-weight: 700; }
+.contract-upload-status.error { color: var(--danger); font-weight: 700; }
 #numero_contrato[readonly] { color: #475467; background: #f2f4f7; cursor: not-allowed; }
 .filter-bar.vehicle-local-filter { grid-template-columns: minmax(0, 1fr) auto; }
 .confirmation-dialog { width: min(480px, calc(100vw - 32px)); padding: 0; color: var(--ink); background: white; border: 1px solid var(--line); border-radius: 13px; box-shadow: 0 24px 70px #0d1b2a38; }

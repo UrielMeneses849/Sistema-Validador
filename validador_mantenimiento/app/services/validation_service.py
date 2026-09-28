@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from typing import Optional
 from uuid import uuid4
 
@@ -361,6 +361,52 @@ def validate_service_event(db: Session, event_id: int) -> ValidationRead:
     event = get_service_event_or_raise(db, event_id)
     assessment = assess_service_event(db, event)
     return _save_service_event_validation(db, event, assessment)
+
+
+def preview_service_event_validation(
+    db: Session, event: ServiceEvent, *, event_scope_ids: set[int]
+) -> ValidationRead:
+    """Calcula VAL-002 sin crear Validation ni AuditLog persistentes."""
+    assessment = assess_service_event(db, event, event_scope_ids)
+    previous = assessment.previous
+    vehicle = event.vehicle
+    details = {
+        **_assessment_details(assessment),
+        "service_event_id": event.id,
+        "document_type": event.document.analysis.document_type
+        if event.document.analysis
+        else None,
+        "extraction_method": event.extraction_method,
+    }
+    return ValidationRead(
+        id=0,
+        validation_code=f"PREVIEW-{event.id}",
+        vehicle_id=event.vehicle_id,
+        vehicle_internal_number=(
+            vehicle.numero_contrato or vehicle.internal_number if vehicle else None
+        ),
+        document_id=event.document_id,
+        maintenance_id=(
+            previous.maintenance.id
+            if previous is not None and previous.maintenance is not None
+            else None
+        ),
+        status=assessment.status,
+        validation_state=assessment.validation_state,
+        document_date=event.service_date,
+        document_odometer=event.mileage_km,
+        last_maintenance_date=previous.service_date if previous else None,
+        last_maintenance_odometer=previous.mileage_km if previous else None,
+        kilometer_limit=assessment.kilometer_limit,
+        date_limit=assessment.date_limit,
+        meets_kilometer_condition=assessment.meets_kilometer_condition,
+        meets_time_condition=assessment.meets_time_condition,
+        message=assessment.message,
+        reasons=assessment.reasons,
+        analysis_details=details,
+        created_at=datetime.now(),
+        audit_logs=[],
+    )
 
 
 def _file_is_valid(document_path: str, mime_type: str, document_available: bool) -> bool:

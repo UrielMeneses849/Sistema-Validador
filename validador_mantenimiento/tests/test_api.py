@@ -1,5 +1,7 @@
 from fastapi.testclient import TestClient
 
+from app.core.config import STORAGE_DIR
+
 
 def test_frontend_routes_keep_audit_and_dashboard_available(client: TestClient):
     audit = client.get("/")
@@ -28,7 +30,10 @@ def test_history_validation_screen_exposes_multi_pdf_flow(client: TestClient):
     assert "Línea temporal consolidada" in page.text
     assert javascript.status_code == 200
     assert "data-remove-file" in javascript.text
-    assert 'API.post("/history-validations"' in javascript.text
+    assert 'API.request("/history-validations/preview"' in javascript.text
+    assert "Los PDF y el resultado no se guardaron" in javascript.text
+    assert "Abrir documento PDF" in javascript.text
+    assert "Ver texto y evidencia técnica" not in javascript.text
     assert "PERIODO DE TOLERANCIA" in javascript.text
     assert "summary.tolerance_period" in javascript.text
     assert ".history-row-tolerance" in stylesheet.text
@@ -61,7 +66,7 @@ def test_vehicle_crud_and_physical_deletion_without_history(client: TestClient):
     )
 
 
-def test_contract_vehicle_uses_server_consecutive_and_is_listed_for_validation(client: TestClient):
+def test_contract_vehicle_preserves_supplied_contract_and_is_listed_for_validation(client: TestClient):
     # Un identificador heredado numérico no debe reutilizarse como contrato.
     legacy = client.post(
         "/api/vehicles",
@@ -80,8 +85,8 @@ def test_contract_vehicle_uses_server_consecutive_and_is_listed_for_validation(c
     created = client.post(
         "/api/vehicles",
         json={
-            # La vista puede enviar su previsualización, pero el servidor es la
-            # fuente de verdad y debe asignar el consecutivo disponible.
+            # Un número extraído del PDF debe conservarse como identificador
+            # real del contrato.
             "numero_contrato": "111111",
             "brand": "Toyota",
             "model": "Hiace",
@@ -93,13 +98,13 @@ def test_contract_vehicle_uses_server_consecutive_and_is_listed_for_validation(c
     )
     assert created.status_code == 201, created.text
     vehicle = created.json()
-    assert vehicle["numero_contrato"] == "835415"
+    assert vehicle["numero_contrato"] == "111111"
     assert vehicle["kilometraje"] == vehicle["current_odometer"] == 42
 
     active_vehicles = client.get("/api/vehicles?status=active")
     assert active_vehicles.status_code == 200
     assert any(item["id"] == vehicle["id"] for item in active_vehicles.json())
-    assert client.get("/api/vehicles/next-contract").json() == {"numero_contrato": "835416"}
+    assert client.get("/api/vehicles/next-contract").json() == {"numero_contrato": "835415"}
 
 
 def test_contract_number_is_immutable_and_contract_dates_remain_valid(client: TestClient):
@@ -145,3 +150,31 @@ def test_document_rejects_empty_or_unsupported_file(client: TestClient):
     )
     assert response.status_code == 422
     assert "vacío" in response.json()["detail"]
+
+
+def test_uploaded_document_can_be_opened_inline_for_manual_review(client: TestClient):
+    vehicle = client.post(
+        "/api/vehicles",
+        json={
+            "internal_number": "VEH-PDF-REVIEW",
+            "plate": "PDF-001",
+            "brand": "Kia",
+            "model": "Bongo",
+            "year": 2024,
+            "current_odometer": 0,
+        },
+    ).json()
+    pdf = b"%PDF-1.4 documento para revision manual"
+    uploaded = client.post(
+        "/api/documents/upload",
+        data={"vehicle_id": str(vehicle["id"])},
+        files={"file": ("revision.pdf", pdf, "application/pdf")},
+    )
+    assert uploaded.status_code == 201, uploaded.text
+
+    opened = client.get(f"/api/documents/{uploaded.json()['id']}/file")
+
+    assert opened.status_code == 200
+    assert opened.headers["content-type"] == "application/pdf"
+    assert opened.content == pdf
+    (STORAGE_DIR / uploaded.json()["stored_filename"]).unlink(missing_ok=True)

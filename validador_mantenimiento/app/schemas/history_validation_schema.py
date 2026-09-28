@@ -70,6 +70,8 @@ class HistorySummaryRead(BaseModel):
 class HistoryValidationRead(BaseModel):
     vehicle_id: int
     vehicle_condition: str
+    ephemeral: bool = False
+    preview_document_ids: list[int] = Field(default_factory=list)
     baseline: HistoryBaselineRead
     policy: Optional[HistoryPolicyRead] = None
     policy_reasons: list[str] = Field(default_factory=list)

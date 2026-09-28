@@ -28,7 +28,7 @@
         <div>
           <p class="eyebrow">Auditoría integral</p>
           <h1>Historial de mantenimientos</h1>
-          <p class="subtitle">Carga todos los comprobantes de un vehículo. InteliDrive reconstruirá la secuencia cronológica y aplicará la política correspondiente como una sola auditoría.</p>
+          <p class="subtitle">Carga los comprobantes para ejecutar una prueba temporal. InteliDrive reconstruirá la secuencia y aplicará la política sin guardar los PDF ni el resultado en el historial del vehículo.</p>
         </div>
       </header>
 
@@ -36,7 +36,7 @@
         <div class="card-header">
           <div>
             <h2 class="card-title">Documentos del vehículo</h2>
-            <p class="card-subtitle">Puedes seleccionar o arrastrar varios PDF y agregar más antes de analizar.</p>
+            <p class="card-subtitle">Puedes seleccionar o arrastrar varios PDF. Al terminar podrás volver a cargar los mismos archivos sin generar duplicados.</p>
           </div>
           <span class="history-step">1 · Preparar historial</span>
         </div>
@@ -53,7 +53,7 @@
               <span class="upload-icon" aria-hidden="true">⇧</span>
               <strong>Arrastra tus PDF aquí</strong>
               <span>o haz clic para seleccionar varios documentos</span>
-              <small>Se conserva el límite configurado por archivo.</small>
+              <small>Prueba temporal: los archivos y resultados no se guardarán.</small>
             </label>
           </div>
 
@@ -95,6 +95,6 @@
     </main>
   </div>
   <script src="/js/api.js"></script>
-  <script src="/js/validation.js?v=history-v1"></script>
+  <script src="/js/validation.js?v=history-v3"></script>
 </body>
 </html>

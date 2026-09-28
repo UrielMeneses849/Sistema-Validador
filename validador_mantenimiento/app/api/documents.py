@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
+from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from app.database.database import get_db
@@ -13,6 +14,7 @@ from app.services.document_service import (
     DocumentNotFoundError,
     InvalidDocumentError,
     get_document_or_raise,
+    is_document_available,
     save_document,
 )
 from app.services.extraction_service import OcrProcessingError, OcrUnavailableError
@@ -55,6 +57,20 @@ def get_one(document_id: int, db: Session = Depends(get_db)) -> DocumentRead:
         return get_document_or_raise(db, document_id)
     except DocumentNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+
+@router.get("/{document_id}/file", response_class=FileResponse)
+def open_original(document_id: int, db: Session = Depends(get_db)) -> FileResponse:
+    try:
+        document = get_document_or_raise(db, document_id)
+    except DocumentNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    if not is_document_available(document):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="El archivo original ya no está disponible.",
+        )
+    return FileResponse(document.file_path, media_type=document.mime_type)
 
 
 @router.post("/{document_id}/analyze", response_model=DocumentAnalysisRead)

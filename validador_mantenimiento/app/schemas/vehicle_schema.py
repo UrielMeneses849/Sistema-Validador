@@ -156,3 +156,17 @@ class VehicleRead(BaseModel):
 
 class NextContractRead(BaseModel):
     numero_contrato: str = Field(pattern=r"^\d{6}$")
+
+
+class ContractExtractionRead(BaseModel):
+    """Campos de alta obtenidos de un contrato PDF sin persistir el archivo."""
+
+    numero_contrato: str = Field(pattern=r"^\d{6}$")
+    fecha_factura_origen: date
+    fecha_inicio_contrato: date
+    fecha_fin_contrato: date
+    initial_odometer: int = Field(ge=0)
+    brand: str = Field(min_length=1, max_length=80)
+    model: str = Field(min_length=1, max_length=80)
+    vehicle_condition: Literal["new", "used"]
+    extraction_method: str

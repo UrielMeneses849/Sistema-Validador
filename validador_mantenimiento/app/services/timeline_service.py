@@ -62,19 +62,23 @@ class TimelineAssessment:
 
 
 def _references_for_vehicle(
-    db: Session, vehicle_id: int, current_event_id: int | None
+    db: Session,
+    vehicle_id: int,
+    current_event_id: int | None,
+    event_scope_ids: set[int] | None = None,
 ) -> list[MaintenanceReference]:
     references: list[MaintenanceReference] = []
     event_query = select(ServiceEvent).where(
         ServiceEvent.vehicle_id == vehicle_id,
         ServiceEvent.service_category == "preventive_maintenance",
         ServiceEvent.resets_maintenance_interval.is_(True),
-        ServiceEvent.requires_human_review.is_(False),
         ServiceEvent.service_date.is_not(None),
         ServiceEvent.mileage_km.is_not(None),
     )
     if current_event_id is not None:
         event_query = event_query.where(ServiceEvent.id != current_event_id)
+    if event_scope_ids is not None:
+        event_query = event_query.where(ServiceEvent.id.in_(event_scope_ids))
     for event in db.scalars(event_query):
         assert event.service_date is not None and event.mileage_km is not None
         references.append(
@@ -99,12 +103,16 @@ def _references_for_vehicle(
     return references
 
 
-def find_previous_maintenance(db: Session, event: ServiceEvent) -> Optional[MaintenanceReference]:
+def find_previous_maintenance(
+    db: Session, event: ServiceEvent, event_scope_ids: set[int] | None = None
+) -> Optional[MaintenanceReference]:
     if event.service_date is None or event.mileage_km is None:
         return None
     candidates = [
         reference
-        for reference in _references_for_vehicle(db, event.vehicle_id, event.id)
+        for reference in _references_for_vehicle(
+            db, event.vehicle_id, event.id, event_scope_ids
+        )
         if reference.service_date < event.service_date
         or (reference.service_date == event.service_date and reference.mileage_km < event.mileage_km)
     ]
@@ -192,7 +200,9 @@ def _assessment(
     )
 
 
-def assess_service_event(db: Session, event: ServiceEvent) -> TimelineAssessment:
+def assess_service_event(
+    db: Session, event: ServiceEvent, event_scope_ids: set[int] | None = None
+) -> TimelineAssessment:
     vehicle = db.get(Vehicle, event.vehicle_id)
     vehicle_condition = vehicle.vehicle_condition if vehicle else "unknown"
     if (
@@ -219,14 +229,6 @@ def assess_service_event(db: Session, event: ServiceEvent) -> TimelineAssessment
             reasons=missing,
             vehicle_condition=vehicle_condition,
         )
-    if event.requires_human_review:
-        return _assessment(
-            status="REQUIRES_REVIEW",
-            validation_state="requires_review",
-            message="Los datos actuales están completos, pero la extracción requiere revisión.",
-            reasons=event.warnings or ["La confianza o consistencia de los datos requiere confirmación humana."],
-            vehicle_condition=vehicle_condition,
-        )
     if vehicle is None:
         return _assessment(
             status="REQUIRES_REVIEW",
@@ -236,7 +238,7 @@ def assess_service_event(db: Session, event: ServiceEvent) -> TimelineAssessment
             vehicle_condition=vehicle_condition,
         )
 
-    previous = find_previous_maintenance(db, event)
+    previous = find_previous_maintenance(db, event, event_scope_ids)
     service_sequence: Literal["first", "subsequent"] = "subsequent" if previous else "first"
     missing_baseline: list[str] = []
     if previous is None:
@@ -266,6 +268,14 @@ def assess_service_event(db: Session, event: ServiceEvent) -> TimelineAssessment
         )
 
     assert previous is not None and policy is not None
+    interval = evaluate_service_interval(
+        previous_date=previous.service_date,
+        previous_odometer=previous.mileage_km,
+        current_date=event.service_date,
+        current_odometer=event.mileage_km,
+        interval_months=policy.interval_months,
+        interval_km=policy.interval_km,
+    )
     regression_reasons = []
     if event.service_date < previous.service_date:
         regression_reasons.append("La fecha del servicio es anterior a la fecha de referencia.")
@@ -286,16 +296,9 @@ def assess_service_event(db: Session, event: ServiceEvent) -> TimelineAssessment
             service_sequence=service_sequence,
             previous=previous,
             policy=policy,
+            interval=interval,
         )
 
-    interval = evaluate_service_interval(
-        previous_date=previous.service_date,
-        previous_odometer=previous.mileage_km,
-        current_date=event.service_date,
-        current_odometer=event.mileage_km,
-        interval_months=policy.interval_months,
-        interval_km=policy.interval_km,
-    )
     if interval.is_compliant:
         status = "COMPLIANT"
         message = "El mantenimiento se realizó dentro del intervalo normal aplicable."
@@ -335,6 +338,22 @@ def assess_service_event(db: Session, event: ServiceEvent) -> TimelineAssessment
             "Se superó el límite máximo de "
             f"{policy.interval_months + TOLERANCE_MONTHS} meses calendario."
         ]
+    if event.requires_human_review:
+        return _assessment(
+            status="REQUIRES_REVIEW",
+            validation_state="requires_review",
+            message=(
+                "La fecha y el kilometraje permitieron calcular el intervalo, "
+                "pero el evento todavía requiere revisión humana."
+            ),
+            reasons=event.warnings
+            or ["La confianza o clasificación del evento requiere confirmación humana."],
+            vehicle_condition=vehicle_condition,
+            service_sequence=service_sequence,
+            previous=previous,
+            policy=policy,
+            interval=interval,
+        )
     return _assessment(
         status=status,
         validation_state=(

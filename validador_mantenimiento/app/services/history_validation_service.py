@@ -19,7 +19,10 @@ from app.schemas.service_event_schema import ServiceEventRead
 from app.services.maintenance_rules import add_calendar_months
 from app.services.service_event_service import get_service_event_or_raise
 from app.services.timeline_service import resolve_maintenance_policy
-from app.services.validation_service import validate_service_event
+from app.services.validation_service import (
+    preview_service_event_validation,
+    validate_service_event,
+)
 from app.services.vehicle_service import get_vehicle_or_raise
 
 
@@ -107,23 +110,33 @@ def _summary(rows: list[HistoryValidationRowRead]) -> HistorySummaryRead:
 
 
 def validate_maintenance_history(
-    db: Session, request: HistoryValidationRequest
+    db: Session,
+    request: HistoryValidationRequest,
+    *,
+    persist_validations: bool = True,
+    include_vehicle_history: bool = True,
 ) -> HistoryValidationRead:
     """Valida una secuencia completa cuando todos sus eventos ya están persistidos."""
     vehicle = get_vehicle_or_raise(db, request.vehicle_id)
+    selected_events: list[ServiceEvent] = []
     for event_id in request.event_ids:
         event = get_service_event_or_raise(db, event_id)
         if event.vehicle_id != vehicle.id:
             raise HistoryVehicleMismatchError(
                 f"El evento #{event.id} no pertenece al vehículo seleccionado."
             )
+        selected_events.append(event)
 
     # El resultado representa el historial completo ya conocido del vehículo,
     # no sólo los archivos agregados en la interacción actual. Los eventos
     # recién seleccionados ya fueron verificados arriba y todos están
     # persistidos antes de comenzar a validar la secuencia.
-    events = list(
-        db.scalars(select(ServiceEvent).where(ServiceEvent.vehicle_id == vehicle.id))
+    events = (
+        list(
+            db.scalars(select(ServiceEvent).where(ServiceEvent.vehicle_id == vehicle.id))
+        )
+        if include_vehicle_history
+        else selected_events
     )
 
     events.sort(
@@ -136,20 +149,41 @@ def validate_maintenance_history(
         )
     )
 
+    # These two columns describe the chronological history shown to the user,
+    # not the maintenance-policy reference selected by VAL-002. A document
+    # can require review (or not reset the maintenance interval) and still be
+    # the immediately preceding row in the visible timeline.
+    previous_history_date = vehicle.fecha_inicio_contrato
+    previous_history_mileage = vehicle.initial_odometer
+    event_scope_ids = {event.id for event in events}
     rows: list[HistoryValidationRowRead] = []
     for event in events:
-        validation = validate_service_event(db, event.id)
+        validation = (
+            validate_service_event(db, event.id)
+            if persist_validations
+            else preview_service_event_validation(
+                db, event, event_scope_ids=event_scope_ids
+            )
+        )
+        elapsed_time = _calendar_elapsed(previous_history_date, event.service_date)
+        delta_km = (
+            event.mileage_km - previous_history_mileage
+            if event.mileage_km is not None and previous_history_mileage is not None
+            else None
+        )
         rows.append(
             HistoryValidationRowRead(
                 service_event=ServiceEventRead.model_validate(event),
                 validation=validation,
-                elapsed_time=_calendar_elapsed(
-                    validation.last_maintenance_date, validation.document_date
-                ),
-                delta_km=(validation.analysis_details or {}).get("delta_km"),
+                elapsed_time=elapsed_time,
+                delta_km=delta_km,
                 document=_document_detail(event),
             )
         )
+        if event.service_date is not None:
+            previous_history_date = event.service_date
+        if event.mileage_km is not None:
+            previous_history_mileage = event.mileage_km
 
     policy, policy_reasons = resolve_maintenance_policy(db, vehicle)
     policy_read = (
@@ -166,6 +200,7 @@ def validate_maintenance_history(
     return HistoryValidationRead(
         vehicle_id=vehicle.id,
         vehicle_condition=vehicle.vehicle_condition,
+        ephemeral=not persist_validations,
         baseline=HistoryBaselineRead(
             date=vehicle.fecha_inicio_contrato,
             mileage_km=vehicle.initial_odometer,

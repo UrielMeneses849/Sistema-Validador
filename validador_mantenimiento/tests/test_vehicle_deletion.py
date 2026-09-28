@@ -17,12 +17,6 @@ from app.models.vehicle import Vehicle
 
 
 _sequence = count(1)
-HISTORY_CONFLICT_MESSAGE = (
-    "No se puede eliminar este vehículo porque tiene mantenimientos, documentos "
-    "o validaciones asociados. Su historial debe conservarse para trazabilidad."
-)
-
-
 def create_vehicle(client: TestClient, *, internal_number: str | None = None) -> dict:
     suffix = next(_sequence)
     response = client.post(
@@ -131,7 +125,7 @@ def test_delete_missing_vehicle_returns_404(client: TestClient):
 @pytest.mark.parametrize(
     "relation", ["maintenance", "document", "service_event", "validation"]
 )
-def test_delete_vehicle_with_related_history_returns_409(
+def test_delete_vehicle_with_related_history_removes_the_complete_graph(
     client: TestClient, relation: str
 ):
     from app.database.database import SessionLocal
@@ -142,9 +136,98 @@ def test_delete_vehicle_with_related_history_returns_409(
 
     response = client.delete(f"/api/vehicles/{vehicle['id']}")
 
-    assert response.status_code == 409
-    assert response.json()["detail"] == HISTORY_CONFLICT_MESSAGE
-    assert client.get(f"/api/vehicles/{vehicle['id']}").status_code == 200
+    assert response.status_code == 204
+    assert client.get(f"/api/vehicles/{vehicle['id']}").status_code == 404
+    with SessionLocal() as db:
+        assert db.query(Vehicle).count() == 0
+        assert db.query(Maintenance).count() == 0
+        assert db.query(Document).count() == 0
+        assert db.query(DocumentAnalysis).count() == 0
+        assert db.query(ServiceEvent).count() == 0
+        assert db.query(Validation).count() == 0
+        assert db.query(AuditLog).count() == 0
+
+
+def test_delete_vehicle_removes_documents_and_evidence_files(
+    client: TestClient, tmp_path, monkeypatch
+):
+    from app.database.database import SessionLocal
+    from app.services import training_dataset_service
+
+    evidence_root = tmp_path / "evidence"
+    evidence_path = evidence_root / "vehicle" / "date.png"
+    evidence_path.parent.mkdir(parents=True)
+    evidence_path.write_bytes(b"crop")
+    monkeypatch.setattr(training_dataset_service, "EVIDENCE_CROP_DIR", evidence_root)
+
+    vehicle = create_vehicle(client)
+    document_path = tmp_path / "original.pdf"
+    document_path.write_bytes(b"%PDF-1.4 test")
+    with SessionLocal() as db:
+        maintenance = Maintenance(
+            vehicle_id=vehicle["id"],
+            maintenance_date=date(2026, 1, 1),
+            odometer=10_000,
+            maintenance_type="Preventivo",
+        )
+        document = Document(
+            vehicle_id=vehicle["id"],
+            original_filename="original.pdf",
+            stored_filename=f"delete-files-{next(_sequence)}.pdf",
+            file_path=str(document_path),
+            mime_type="application/pdf",
+            file_size=document_path.stat().st_size,
+        )
+        db.add_all([maintenance, document])
+        db.flush()
+        db.add(
+            DocumentAnalysis(
+                document_id=document.id,
+                extraction_method="pdf_text",
+            )
+        )
+        event = ServiceEvent(
+            document_id=document.id,
+            vehicle_id=vehicle["id"],
+            extraction_method="pdf_text",
+            service_date=date(2026, 1, 1),
+            mileage_km=10_000,
+            service_category="preventive_maintenance",
+            resets_maintenance_interval=True,
+            field_evidence={"date": {"crop_id": "vehicle/date.png"}},
+        )
+        validation = Validation(
+            validation_code=f"DELETE-ALL-{next(_sequence)}",
+            vehicle_id=vehicle["id"],
+            document_id=document.id,
+            maintenance_id=maintenance.id,
+            status="COMPLIANT",
+            message="Validación de prueba",
+        )
+        db.add_all([event, validation])
+        db.flush()
+        db.add(
+            AuditLog(
+                validation_id=validation.id,
+                event_type="FINAL_RESULT",
+                message="Resultado de prueba",
+            )
+        )
+        db.commit()
+
+    response = client.delete(f"/api/vehicles/{vehicle['id']}")
+
+    assert response.status_code == 204
+    assert document_path.exists() is False
+    assert evidence_path.exists() is False
+    with SessionLocal() as db:
+        assert db.query(Vehicle).count() == 0
+        assert db.query(Maintenance).count() == 0
+        assert db.query(Document).count() == 0
+        assert db.query(DocumentAnalysis).count() == 0
+        assert db.query(ServiceEvent).count() == 0
+        assert db.query(Validation).count() == 0
+        assert db.query(AuditLog).count() == 0
 
 
 def test_legacy_vehicle_without_relations_can_be_deleted_by_id(client: TestClient):
@@ -167,7 +250,8 @@ def test_vehicles_frontend_requires_confirmation_and_exposes_delete_feedback(
     assert page.status_code == 200
     assert 'id="vehicle-delete-dialog"' in page.text
     assert "¿Eliminar este vehículo?" in page.text
-    assert "Esta acción eliminará definitivamente el registro" in page.text
+    assert "sus mantenimientos, documentos y validaciones asociados" in page.text
+    assert "No se puede deshacer" in page.text
     assert 'id="delete-vehicle-contract"' in page.text
     assert 'id="delete-vehicle-brand"' in page.text
     assert 'id="delete-vehicle-model"' in page.text
@@ -176,7 +260,7 @@ def test_vehicles_frontend_requires_confirmation_and_exposes_delete_feedback(
     assert ">Eliminar vehículo<" in page.text
     assert 'data-action="delete"' in javascript.text
     assert "deleteDialog.showModal()" in javascript.text
-    assert "Vehículo eliminado correctamente." in javascript.text
+    assert "Vehículo y datos asociados eliminados correctamente." in javascript.text
     assert "deleteError.textContent = error.message" in javascript.text
     assert 'deleteError.className = "notice error show"' in javascript.text
     assert ".confirmation-dialog" in stylesheet.text

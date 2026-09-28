@@ -12,6 +12,11 @@ from app.services.extraction_service import ExtractionResult, LayoutWord
 
 
 DATE_PATTERN = re.compile(r"\b(0?[1-9]|[12]\d|3[01])[\/\-.](0?[1-9]|1[0-2])[\/\-.]((?:19|20)?\d{2})\b")
+ISO_DATE_PATTERN = re.compile(
+    r"\b((?:19|20)\d{2})-(0[1-9]|1[0-2])-([0-2]\d|3[01])"
+    r"(?:T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?\b",
+    re.IGNORECASE,
+)
 SPANISH_MONTHS = {
     "ENERO": 1, "FEBRERO": 2, "MARZO": 3, "ABRIL": 4, "MAYO": 5, "JUNIO": 6,
     "JULIO": 7, "AGOSTO": 8, "SEPTIEMBRE": 9, "SETIEMBRE": 9, "OCTUBRE": 10,
@@ -148,23 +153,32 @@ def _choose_by_frequency(matches: list[tuple[int, str]], normalizer) -> FieldVal
 
 
 def _normalize_date(raw: str) -> Optional[date]:
-    match = DATE_PATTERN.fullmatch(raw.strip())
-    if match:
-        day, month, year = match.groups()
+    clean = raw.strip()
+    iso_match = ISO_DATE_PATTERN.fullmatch(clean)
+    if iso_match:
+        year, month, day = iso_match.groups()
+        normalized_year = int(year)
         month_number = int(month)
     else:
-        textual_match = TEXTUAL_DATE_PATTERN.fullmatch(_comparison_text(raw.strip()))
-        if not textual_match:
-            return None
-        day, month_name, year = textual_match.groups()
-        month_number = SPANISH_MONTHS[month_name.upper()]
-    if len(year) == 2:
-        numeric_year = int(year)
-        normalized_year = 2000 + numeric_year if numeric_year <= 49 else 1900 + numeric_year
-        if normalized_year > date.today().year + 1 or normalized_year < 1950:
-            return None
-    else:
-        normalized_year = int(year)
+        match = DATE_PATTERN.fullmatch(clean)
+        if match:
+            day, month, year = match.groups()
+            month_number = int(month)
+        else:
+            textual_match = TEXTUAL_DATE_PATTERN.fullmatch(_comparison_text(clean))
+            if not textual_match:
+                return None
+            day, month_name, year = textual_match.groups()
+            month_number = SPANISH_MONTHS[month_name.upper()]
+        if len(year) == 2:
+            numeric_year = int(year)
+            normalized_year = (
+                2000 + numeric_year if numeric_year <= 49 else 1900 + numeric_year
+            )
+            if normalized_year > date.today().year + 1 or normalized_year < 1950:
+                return None
+        else:
+            normalized_year = int(year)
     try:
         return datetime(normalized_year, month_number, int(day)).date()
     except ValueError:
@@ -173,14 +187,18 @@ def _normalize_date(raw: str) -> Optional[date]:
 
 def extract_date(pages: list[tuple[int, str]], words: list[LayoutWord] | None = None) -> FieldValue:
     candidates: list[dict[str, Any]] = []
-    for pattern, base_pattern_confidence in ((DATE_PATTERN, 0.96), (TEXTUAL_DATE_PATTERN, 0.93)):
+    for pattern, base_pattern_confidence in (
+        (ISO_DATE_PATTERN, 0.97),
+        (DATE_PATTERN, 0.96),
+        (TEXTUAL_DATE_PATTERN, 0.93),
+    ):
         for page, _, match in _iter_matches(pages, pattern):
             raw = match.group(0)
             normalized = _normalize_date(raw)
             if normalized is None:
                 continue
             pattern_confidence = base_pattern_confidence
-            if len(match.groups()[-1]) == 2:
+            if pattern is not ISO_DATE_PATTERN and len(match.groups()[-1]) == 2:
                 pattern_confidence = min(pattern_confidence, 0.82)
             score = _combined_pattern_token_confidence(
                 pattern_confidence, _token_confidence(words or [], page, raw)
@@ -220,14 +238,26 @@ def extract_mileage(pages: list[tuple[int, str]], words: list[LayoutWord] | None
             continue  # Años no son odómetros.
         start, end = match.span()
         context = _comparison_text(page_text[max(0, start - 70) : min(len(page_text), end + 70)])
+        before = _comparison_text(page_text[max(0, start - 55) : start])
+        after = _comparison_text(page_text[end : min(len(page_text), end + 20)])
+        scheduled_interval = bool(
+            re.search(r"\b(?:SERVICIO|MANTENIMIENTO)\b.{0,45}$", before)
+            and re.match(r"\s*KMS?\.?\b", after)
+        )
+        if scheduled_interval:
+            continue  # "Servicio de 6,000 Kms." es un intervalo comercial, no el odómetro real.
         has_labeled_context = bool(re.search(r"\b(KILOMETRAJE|KILOMETROS?|ODOMETRO)\b", context))
-        has_km_context = bool(re.search(r"\bKM\b", context))
+        has_km_context = bool(re.search(r"\bKMS?\b", context))
+        has_explicit_km_label = bool(
+            re.search(r"\bKMS?\.?\s*:?\s*$", before)
+            or re.match(r"\s*KMS?\.?\b", after)
+        )
         if not has_labeled_context and not has_km_context:
             continue  # Un número sin evidencia semántica no se trata como odómetro.
         score = 1
         if raw.lstrip().startswith("0") and len(re.sub(r"\D", "", raw)) >= 6:
             score -= 6  # Códigos de operación/refacción suelen tener ceros iniciales.
-        if re.search(r"\b(KILOMETRAJE|ODOMETRO|KM\.?\s*(ENTRADA|ENT\.?|ACTUAL)?)\b", context):
+        if has_labeled_context or has_explicit_km_label:
             score += 8
         if DATE_PATTERN.search(page_text[end : min(len(page_text), end + 30)]):
             score += 4
@@ -235,7 +265,7 @@ def extract_mileage(pages: list[tuple[int, str]], words: list[LayoutWord] | None
             score += 4
         if re.search(r"\b(SERVICIO|OPERACION|PARTE|COSTO|TOTAL|IVA|SUBTOTAL)\b", context):
             score -= 4
-        pattern_confidence = 0.97 if has_labeled_context else 0.84
+        pattern_confidence = 0.97 if has_labeled_context or has_explicit_km_label else 0.84
         confidence_score = _combined_pattern_token_confidence(
             pattern_confidence, _token_confidence(words or [], page_number, raw)
         )
@@ -404,8 +434,22 @@ def classify_service_event(
         )
     )
     scheduled_service = bool(
-        re.search(r"\bSERVICIO\s+(?:DE\s+)?\d+(?:\s|,)*(?:MIL|KM)\b", combined)
-        or re.search(r"\bSERVICIO\s+\d{1,3}(?:\s\d{3}|000)\s*KM\b", combined)
+        # La normalización convierte "12,000" en "12 000". Se aceptan
+        # ambas formas y la variante "Servicio de mantenimiento de ...".
+        re.search(
+            r"\bSERVICIO(?:\s+DE)?(?:\s+MANTENIMIENTO)?(?:\s+DE)?\s+"
+            r"\d{1,3}(?:\s+\d{3}|000)?\s+(?:MIL|KMS?)\b",
+            combined,
+        )
+        # Algunos distribuidores facturan los paquetes programados como
+        # S24SILVERADO, S36SILVERADO, etc. El número representa el intervalo
+        # en miles de kilómetros y el sufijo identifica el modelo.
+        or any(
+            6 <= int(interval) <= 300 and int(interval) % 6 == 0
+            for interval, _model in re.findall(
+                r"\bS(\d{1,3})([A-Z]{3,})(?=\s|$)", combined
+            )
+        )
     )
     complementary = any(
         phrase in combined
@@ -520,10 +564,15 @@ def _field_from_spatial_candidates(
         return FieldValue()
     ranked = sorted(candidates, key=lambda candidate: candidate["score"], reverse=True)
     selected_value = ranked[0]["value"]
-    distinct_values = {candidate["value"] for candidate in ranked}
+    value_counts = Counter(candidate["value"] for candidate in ranked)
+    selected_occurrences = value_counts[selected_value]
     ambiguous = force_ambiguous or any(
         candidate["value"] != selected_value
         and candidate["score"] >= ranked[0]["score"] - 0.08
+        and (
+            not is_date
+            or value_counts[candidate["value"]] >= selected_occurrences
+        )
         for candidate in ranked[1:]
     )
     selected_score = min(ranked[0]["score"], 0.75) if ambiguous else ranked[0]["score"]
@@ -615,7 +664,7 @@ def extract_spatial_mileage(words: list[LayoutWord]) -> FieldValue:
     for line in lines:
         for label_word in line.words:
             label = _semantic_text(label_word.text)
-            if label not in {"KM ENT", "KM SAL", "KILOMETRAJE", "ODOMETRO", "ODOMETER"}:
+            if label not in {"KM", "KMS", "KM ENT", "KM SAL", "KILOMETRAJE", "ODOMETRO", "ODOMETER"}:
                 continue
             same_line = [
                 word for word in line.words

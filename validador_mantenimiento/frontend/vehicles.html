@@ -47,6 +47,22 @@
           <div id="vehicle-notice" class="notice" role="status" aria-live="polite"></div>
 
           <form id="vehicle-form" novalidate>
+            <section class="vehicle-form-section contract-upload-section" aria-labelledby="contract-upload-title">
+              <div class="vehicle-form-section-heading">
+                <div>
+                  <h3 id="contract-upload-title">Cargar contrato PDF</h3>
+                  <p>Extrae contrato, fechas, vehículo, condición y kilometraje inicial.</p>
+                </div>
+              </div>
+              <label class="upload-zone contract-upload-zone" for="contract-pdf">
+                <span class="upload-icon" aria-hidden="true">⇧</span>
+                <strong id="contract-upload-label">Seleccionar contrato PDF</strong>
+                <small>Después de leerlo sólo tendrás que capturar el kilometraje actual. El PDF no se guarda.</small>
+                <input id="contract-pdf" name="contract_pdf" type="file" accept="application/pdf,.pdf">
+              </label>
+              <div id="contract-upload-status" class="contract-upload-status" role="status" aria-live="polite"></div>
+            </section>
+
             <section class="vehicle-form-section" aria-labelledby="vehicle-data-title">
               <div class="vehicle-form-section-heading">
                 <div>
@@ -99,7 +115,7 @@
               <div class="vehicle-form-section-heading">
                 <div>
                   <h3 id="contract-data-title">Datos del contrato</h3>
-                  <p>El número se asigna automáticamente al guardar el registro.</p>
+                  <p>Los datos pueden obtenerse del PDF o completarse manualmente.</p>
                 </div>
               </div>
 
@@ -107,7 +123,7 @@
                 <div class="field full">
                   <label for="numero_contrato">Número de contrato</label>
                   <input id="numero_contrato" name="numero_contrato" type="text" required readonly inputmode="numeric" pattern="[0-9]{6}" minlength="6" maxlength="6" aria-describedby="numero-contrato-hint">
-                  <p class="hint" id="numero-contrato-hint">ID automático de seis dígitos.</p>
+                  <p class="hint" id="numero-contrato-hint">Se conserva el número leído del contrato; sin PDF se asigna el consecutivo disponible.</p>
                 </div>
                 <div class="field">
                   <label for="fecha_inicio_contrato">Fecha inicio de contrato <span class="required">*</span></label>
@@ -163,7 +179,7 @@
       <div class="confirmation-dialog-icon" aria-hidden="true">!</div>
       <p class="eyebrow">Confirmar eliminación</p>
       <h2 id="vehicle-delete-title">¿Eliminar este vehículo?</h2>
-      <p id="vehicle-delete-description">Esta acción eliminará definitivamente el registro si no tiene historial asociado.</p>
+      <p id="vehicle-delete-description">Esta acción eliminará definitivamente el vehículo, sus mantenimientos, documentos y validaciones asociados. No se puede deshacer.</p>
       <dl class="confirmation-details">
         <div><dt>Número de contrato</dt><dd id="delete-vehicle-contract">—</dd></div>
         <div><dt>Marca</dt><dd id="delete-vehicle-brand">—</dd></div>
@@ -177,7 +193,7 @@
     </form>
   </dialog>
 
-  <script src="/js/api.js"></script>
-  <script src="/js/vehicles.js?v=vehicle-delete"></script>
+  <script src="/js/api.js?v=contract-upload-v1"></script>
+  <script src="/js/vehicles.js?v=contract-upload-v1"></script>
 </body>
 </html>
