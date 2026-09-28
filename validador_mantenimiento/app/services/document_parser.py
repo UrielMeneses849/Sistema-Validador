@@ -450,6 +450,15 @@ def classify_service_event(
                 r"\bS(\d{1,3})([A-Z]{3,})(?=\s|$)", combined
             )
         )
+        # Las órdenes suelen describir el paquete con ordinales en vez de
+        # repetir el kilometraje: "Primer mantenimiento" o
+        # "Quinto servicio programado".
+        or re.search(
+            r"\b(?:PRIMER(?:O)?|SEGUNDO|TERCER(?:O)?|CUARTO|QUINTO|SEXTO|"
+            r"SEPTIMO|OCTAVO|NOVENO|DECIMO)\s+"
+            r"(?:SERVICIO|MANTENIMIENTO)(?:\s+(?:PROGRAMADO|DE\s+CORTESIA))?\b",
+            combined,
+        )
     )
     complementary = any(
         phrase in combined
@@ -610,13 +619,30 @@ def extract_spatial_date(words: list[LayoutWord]) -> FieldValue:
                     value_word = min(values, key=lambda word: word.x0)
                     normalized = _normalize_date(value_word.text)
                     assert normalized is not None
+                    qualifier = " ".join(
+                        _semantic_text(word.text)
+                        for word in line.words
+                        if label_word.x1 <= word.x0 < value_word.x0
+                    )
+                    if "SERVICIO" in qualifier:
+                        base_score = 0.995
+                        reason = "Fecha identificada explícitamente como fecha de servicio."
+                    elif any(
+                        token in qualifier
+                        for token in ("EMISION", "CERTIFICACION", "TIMBRADO", "VENCIMIENTO")
+                    ):
+                        base_score = 0.82
+                        reason = "Fecha documental secundaria; no sustituye la fecha de servicio."
+                    else:
+                        base_score = 0.93
+                        reason = "Fecha situada a la derecha de la etiqueta Fecha."
                     candidates.append(_spatial_candidate(
                         value=normalized,
                         raw=value_word.text,
                         label="Fecha",
                         word=value_word,
-                        score=_combined_pattern_token_confidence(0.99, value_word.confidence),
-                        reasons=["Fecha situada a la derecha de la etiqueta Fecha."],
+                        score=_combined_pattern_token_confidence(base_score, value_word.confidence),
+                        reasons=[reason],
                     ))
             if label in {"REPAR", "REPARACION"} or label.endswith("REPAR"):
                 below = [
@@ -666,6 +692,19 @@ def extract_spatial_mileage(words: list[LayoutWord]) -> FieldValue:
             label = _semantic_text(label_word.text)
             if label not in {"KM", "KMS", "KM ENT", "KM SAL", "KILOMETRAJE", "ODOMETRO", "ODOMETER"}:
                 continue
+            if label in {"KM", "KMS"}:
+                label_index = line.words.index(label_word)
+                previous_word = line.words[label_index - 1] if label_index else None
+                # En "9,842 km 10,000 km", ambos "km" son unidades que
+                # siguen a una cifra, no etiquetas del odómetro. Sólo se
+                # acepta KM/KMS como etiqueta cuando precede al valor, como
+                # en "Kms. 46145" o "KM: 105849".
+                if (
+                    previous_word is not None
+                    and _integer_word_value(previous_word) is not None
+                    and 0 <= label_word.x0 - previous_word.x1 <= 25
+                ):
+                    continue
             same_line = [
                 word for word in line.words
                 if word.x0 >= label_word.x1
@@ -1150,7 +1189,10 @@ def parse_document(result: ExtractionResult) -> ParsedDocument:
     description = " / ".join(lines) or None
     category, service_type, resets, review, classification_warnings = classify_service_event(
         works=lines,
-        description=description or text,
+        # `lines` se limita para presentar un resumen legible. La
+        # clasificación sí debe considerar el documento completo, pues la
+        # descripción del paquete puede aparecer después de varios encabezados.
+        description=text,
         document_type=document_type,
     )
     warnings = list(result.warnings)

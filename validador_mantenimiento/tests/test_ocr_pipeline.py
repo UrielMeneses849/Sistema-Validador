@@ -68,6 +68,24 @@ def test_kms_column_is_spatially_linked_to_value_below():
     assert field.confidence_score >= 0.88
 
 
+def test_programmed_level_beside_actual_odometer_is_not_ambiguous():
+    words = [
+        LayoutWord("ODÓMETRO", 1, 280.0, 330.0, 200.0, 208.0),
+        LayoutWord("NIVEL", 1, 420.0, 450.0, 200.0, 208.0),
+        LayoutWord("PROGRAMADO", 1, 452.0, 520.0, 200.0, 208.0),
+        LayoutWord("9,842", 1, 300.0, 330.0, 220.0, 228.0),
+        LayoutWord("km", 1, 333.0, 345.0, 220.0, 228.0),
+        LayoutWord("10,000", 1, 440.0, 475.0, 220.0, 228.0),
+        LayoutWord("km", 1, 478.0, 490.0, 220.0, 228.0),
+    ]
+
+    field = extract_spatial_mileage(words)
+
+    assert field.normalized_value == 9842
+    assert field.ambiguous is False
+    assert field.confidence_score >= 0.88
+
+
 def test_repeated_service_date_outweighs_single_document_date():
     words = [
         LayoutWord("Fecha", 1, 480.0, 515.0, 50.0, 57.0),
@@ -85,6 +103,25 @@ def test_repeated_service_date_outweighs_single_document_date():
     assert field.ambiguous is False
 
 
+def test_explicit_service_date_outweighs_later_issue_date():
+    words = [
+        LayoutWord("FECHA", 1, 330.0, 365.0, 100.0, 108.0),
+        LayoutWord("DE", 1, 368.0, 380.0, 100.0, 108.0),
+        LayoutWord("SERVICIO", 1, 383.0, 430.0, 100.0, 108.0),
+        LayoutWord("01/11/2025", 1, 438.0, 480.0, 100.0, 108.0),
+        LayoutWord("FECHA", 1, 330.0, 365.0, 120.0, 128.0),
+        LayoutWord("DE", 1, 368.0, 380.0, 120.0, 128.0),
+        LayoutWord("EMISIÓN", 1, 383.0, 430.0, 120.0, 128.0),
+        LayoutWord("03/11/2025", 1, 438.0, 480.0, 120.0, 128.0),
+    ]
+
+    field = extract_spatial_date(words)
+
+    assert field.normalized_value == date(2025, 11, 1)
+    assert field.ambiguous is False
+    assert field.confidence_score >= 0.88
+
+
 def test_scheduled_service_kms_is_not_used_as_actual_odometer():
     field = extract_mileage([(1, "Servicio de Mantenimiento de 6,000 Kms.")])
     assert field.normalized_value is None
@@ -96,6 +133,9 @@ def test_scheduled_service_kms_is_not_used_as_actual_odometer():
         "1.35 SERVICIO DE 12,000 KM UNIDAD DE SERVICIO",
         "Unidad de servicio E48 S24SILVERADO 2.7 4X4 24",
         "Unidad de servicio E48 S36SILVERADO 2.7 4X4 24",
+        "Primer servicio de cortesía - 6,000 km",
+        "Quinto servicio programado - 50,000 km",
+        "Primer mantenimiento - 15,000 km / 1 año",
     ],
 )
 def test_dealer_scheduled_service_descriptions_restart_interval(description: str):
@@ -110,6 +150,44 @@ def test_dealer_scheduled_service_descriptions_restart_interval(description: str
     assert resets is True
     assert review is False
     assert warnings == []
+
+
+def test_parser_uses_full_document_to_classify_service_after_summary_limit():
+    text = "\n".join([
+        "ORDEN DE SERVICIO",
+        "Departamento de Servicio Certificado",
+        "REPORTE DE MANTENIMIENTO",
+        "CLIENTE DEMOSTRACION FECHA DE SERVICIO 08/04/2025",
+        "SERVICIO REALIZADO ODÓMETRO DE ENTRADA NIVEL PROGRAMADO",
+        "ENCABEZADO DE SERVICIO ADICIONAL",
+        "Servicio de 10,000 km / 6 meses 9,842 km 10,000 km",
+    ])
+    words = [
+        LayoutWord("FECHA", 1, 330.0, 365.0, 100.0, 108.0),
+        LayoutWord("DE", 1, 368.0, 380.0, 100.0, 108.0),
+        LayoutWord("SERVICIO", 1, 383.0, 430.0, 100.0, 108.0),
+        LayoutWord("08/04/2025", 1, 438.0, 480.0, 100.0, 108.0),
+        LayoutWord("ODÓMETRO", 1, 280.0, 330.0, 200.0, 208.0),
+        LayoutWord("NIVEL", 1, 420.0, 450.0, 200.0, 208.0),
+        LayoutWord("PROGRAMADO", 1, 452.0, 520.0, 200.0, 208.0),
+        LayoutWord("9,842", 1, 300.0, 330.0, 220.0, 228.0),
+        LayoutWord("km", 1, 333.0, 345.0, 220.0, 228.0),
+        LayoutWord("10,000", 1, 440.0, 475.0, 220.0, 228.0),
+        LayoutWord("km", 1, 478.0, 490.0, 220.0, 228.0),
+    ]
+
+    event = parse_document(ExtractionResult(
+        method="pdf_text",
+        pages=[ExtractedPage(1, text)],
+        words=words,
+        has_usable_text=True,
+    )).service_events[0]
+
+    assert event.service_date.normalized_value == date(2025, 4, 8)
+    assert event.mileage.normalized_value == 9842
+    assert event.service_category == "preventive_maintenance"
+    assert event.resets_maintenance_interval is True
+    assert event.requires_human_review is False
 
 
 @pytest.mark.parametrize(
