@@ -20,6 +20,11 @@ const API = {
     form.append("file", file)
     return this.request("/documents/upload", { method: "POST", body: form })
   },
+  extractContract(file) {
+    const form = new FormData()
+    form.append("file", file)
+    return this.request("/vehicles/extract-contract", { method: "POST", body: form })
+  },
 }
 
 const UI = {
@@ -112,4 +117,3 @@ visualObserver.observe(document.body, { childList: true, subtree: true })
 const auditStatus = document.querySelector("#audit-process-status")
 if (auditStatus) new MutationObserver(updateAuditFlow).observe(auditStatus, { attributes: true, attributeFilter: ["class"] })
 updateAuditFlow()
-

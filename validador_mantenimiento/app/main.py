@@ -6,7 +6,16 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.api import dashboard, documents, maintenances, service_events, validations, vehicles
+from app.api import (
+    dashboard,
+    documents,
+    history_validations,
+    maintenances,
+    manufacturer_rules,
+    service_events,
+    validations,
+    vehicles,
+)
 from app.core.config import FRONTEND_DIR, ensure_directories
 from app.database.init_db import init_db
 
@@ -27,9 +36,11 @@ app = FastAPI(
 
 app.include_router(dashboard.router)
 app.include_router(vehicles.router)
+app.include_router(manufacturer_rules.router)
 app.include_router(maintenances.router)
 app.include_router(documents.router)
 app.include_router(service_events.router)
+app.include_router(history_validations.router)
 app.include_router(validations.router)
 
 app.mount("/css", StaticFiles(directory=FRONTEND_DIR / "css"), name="css")
@@ -46,6 +57,7 @@ def frontend_page(page_name: str) -> FileResponse:
     allowed_pages = {
         "dashboard",
         "vehicles",
+        "manufacturer_rules",
         "register_maintenance",
         "validate_document",
         "results",

@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="es-MX">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Políticas de marca · InteliDrive</title>
+  <link rel="stylesheet" href="/css/styles.css">
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <a class="brand" href="/"><span class="brand-mark">ID</span><span><strong>InteliDrive</strong><small>Vehicle Intelligence</small></span></a>
+      <p class="nav-label">OPERACIÓN</p>
+      <nav>
+        <ul class="nav-list">
+          <li><a href="/"><span class="nav-icon">⌕</span>Auditoría historial</a></li>
+          <li><a href="/dashboard.html"><span class="nav-icon">▦</span>Dashboard</a></li>
+          <li><a href="/vehicles.html"><span class="nav-icon">▤</span>Vehículos</a></li>
+          <li><a class="active" href="/manufacturer_rules.html"><span class="nav-icon">⚙</span>Reglas de fabricantes</a></li>
+          <li><a href="/register_maintenance.html"><span class="nav-icon">◷</span>Últimos mantenimientos</a></li>
+          <li><a href="/validate_document.html"><span class="nav-icon">⌁</span>Validar documento</a></li>
+          <li><a href="/history.html"><span class="nav-icon">☷</span>Historial</a></li>
+        </ul>
+      </nav>
+      <div class="side-footer"><span>Powered by</span><strong>NEXVORA</strong></div>
+    </aside>
+
+    <main class="page">
+      <header class="page-header">
+        <div>
+          <p class="eyebrow">Reglas para Nuevo (M1)</p>
+          <h1>Políticas de mantenimiento por marca</h1>
+          <p class="subtitle">Configura los límites máximos de tiempo y kilometraje indicados por cada fabricante.</p>
+        </div>
+        <a class="button button-secondary" href="/vehicles.html">← Volver a vehículos</a>
+      </header>
+
+      <div class="split">
+        <section class="card">
+          <div class="card-header">
+            <div>
+              <h2 class="card-title" id="rule-form-title">Registrar política</h2>
+              <p class="card-subtitle">No se precarga ninguna regla; captura únicamente políticas confirmadas.</p>
+            </div>
+          </div>
+          <div id="rule-notice" class="notice" role="status" aria-live="polite"></div>
+          <form id="rule-form">
+            <div class="form-grid">
+              <div class="field full">
+                <label for="rule-brand">Marca <span class="required">*</span></label>
+                <input id="rule-brand" name="brand" maxlength="80" required placeholder="Ford">
+              </div>
+              <div class="field">
+                <label for="rule-months">Intervalo en meses <span class="required">*</span></label>
+                <input id="rule-months" name="interval_months" type="number" min="1" step="1" required placeholder="12">
+              </div>
+              <div class="field">
+                <label for="rule-km">Intervalo en kilómetros <span class="required">*</span></label>
+                <input id="rule-km" name="interval_km" type="number" min="1" step="1" required placeholder="10000">
+              </div>
+              <div class="field full checkbox-field">
+                <label><input id="rule-active" name="active" type="checkbox" checked> Política activa</label>
+              </div>
+            </div>
+            <div class="form-actions">
+              <button class="button button-primary" id="rule-submit" type="submit">Guardar política</button>
+              <button class="button button-secondary hidden" id="rule-cancel" type="button">Cancelar edición</button>
+            </div>
+          </form>
+        </section>
+
+        <section class="card">
+          <div class="card-header">
+            <div>
+              <h2 class="card-title">Políticas registradas</h2>
+              <p class="card-subtitle">Una política inactiva se conserva para trazabilidad, pero no se aplica a nuevas validaciones.</p>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table class="data-table">
+              <thead><tr><th>Marca</th><th>Meses</th><th>Kilómetros</th><th>Estado</th><th>Acciones</th></tr></thead>
+              <tbody id="rules-table"><tr><td colspan="5" class="loading">Cargando políticas…</td></tr></tbody>
+            </table>
+          </div>
+        </section>
+      </div>
+    </main>
+  </div>
+  <script src="/js/api.js"></script>
+  <script src="/js/manufacturer_rules.js"></script>
+</body>
+</html>

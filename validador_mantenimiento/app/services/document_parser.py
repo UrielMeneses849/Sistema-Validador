@@ -12,6 +12,11 @@ from app.services.extraction_service import ExtractionResult, LayoutWord
 
 
 DATE_PATTERN = re.compile(r"\b(0?[1-9]|[12]\d|3[01])[\/\-.](0?[1-9]|1[0-2])[\/\-.]((?:19|20)?\d{2})\b")
+ISO_DATE_PATTERN = re.compile(
+    r"\b((?:19|20)\d{2})-(0[1-9]|1[0-2])-([0-2]\d|3[01])"
+    r"(?:T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?\b",
+    re.IGNORECASE,
+)
 SPANISH_MONTHS = {
     "ENERO": 1, "FEBRERO": 2, "MARZO": 3, "ABRIL": 4, "MAYO": 5, "JUNIO": 6,
     "JULIO": 7, "AGOSTO": 8, "SEPTIEMBRE": 9, "SETIEMBRE": 9, "OCTUBRE": 10,
@@ -38,6 +43,7 @@ class FieldValue:
     confidence_score: float = 0.0
     candidates: list[dict[str, Any]] = field(default_factory=list)
     ambiguous: bool = False
+    evidence_metadata: dict[str, Any] = field(default_factory=dict)
 
     def evidence(self, method: str) -> dict[str, Any]:
         normalized = self.normalized_value.isoformat() if isinstance(self.normalized_value, date) else self.normalized_value
@@ -50,6 +56,7 @@ class FieldValue:
             "confidence_score": round(self.confidence_score, 4),
             "candidates": self.candidates,
             "ambiguous": self.ambiguous,
+            **self.evidence_metadata,
         }
 
 
@@ -146,23 +153,32 @@ def _choose_by_frequency(matches: list[tuple[int, str]], normalizer) -> FieldVal
 
 
 def _normalize_date(raw: str) -> Optional[date]:
-    match = DATE_PATTERN.fullmatch(raw.strip())
-    if match:
-        day, month, year = match.groups()
+    clean = raw.strip()
+    iso_match = ISO_DATE_PATTERN.fullmatch(clean)
+    if iso_match:
+        year, month, day = iso_match.groups()
+        normalized_year = int(year)
         month_number = int(month)
     else:
-        textual_match = TEXTUAL_DATE_PATTERN.fullmatch(_comparison_text(raw.strip()))
-        if not textual_match:
-            return None
-        day, month_name, year = textual_match.groups()
-        month_number = SPANISH_MONTHS[month_name.upper()]
-    if len(year) == 2:
-        numeric_year = int(year)
-        normalized_year = 2000 + numeric_year if numeric_year <= 49 else 1900 + numeric_year
-        if normalized_year > date.today().year + 1 or normalized_year < 1950:
-            return None
-    else:
-        normalized_year = int(year)
+        match = DATE_PATTERN.fullmatch(clean)
+        if match:
+            day, month, year = match.groups()
+            month_number = int(month)
+        else:
+            textual_match = TEXTUAL_DATE_PATTERN.fullmatch(_comparison_text(clean))
+            if not textual_match:
+                return None
+            day, month_name, year = textual_match.groups()
+            month_number = SPANISH_MONTHS[month_name.upper()]
+        if len(year) == 2:
+            numeric_year = int(year)
+            normalized_year = (
+                2000 + numeric_year if numeric_year <= 49 else 1900 + numeric_year
+            )
+            if normalized_year > date.today().year + 1 or normalized_year < 1950:
+                return None
+        else:
+            normalized_year = int(year)
     try:
         return datetime(normalized_year, month_number, int(day)).date()
     except ValueError:
@@ -171,14 +187,18 @@ def _normalize_date(raw: str) -> Optional[date]:
 
 def extract_date(pages: list[tuple[int, str]], words: list[LayoutWord] | None = None) -> FieldValue:
     candidates: list[dict[str, Any]] = []
-    for pattern, base_pattern_confidence in ((DATE_PATTERN, 0.96), (TEXTUAL_DATE_PATTERN, 0.93)):
+    for pattern, base_pattern_confidence in (
+        (ISO_DATE_PATTERN, 0.97),
+        (DATE_PATTERN, 0.96),
+        (TEXTUAL_DATE_PATTERN, 0.93),
+    ):
         for page, _, match in _iter_matches(pages, pattern):
             raw = match.group(0)
             normalized = _normalize_date(raw)
             if normalized is None:
                 continue
             pattern_confidence = base_pattern_confidence
-            if len(match.groups()[-1]) == 2:
+            if pattern is not ISO_DATE_PATTERN and len(match.groups()[-1]) == 2:
                 pattern_confidence = min(pattern_confidence, 0.82)
             score = _combined_pattern_token_confidence(
                 pattern_confidence, _token_confidence(words or [], page, raw)
@@ -218,14 +238,26 @@ def extract_mileage(pages: list[tuple[int, str]], words: list[LayoutWord] | None
             continue  # Años no son odómetros.
         start, end = match.span()
         context = _comparison_text(page_text[max(0, start - 70) : min(len(page_text), end + 70)])
+        before = _comparison_text(page_text[max(0, start - 55) : start])
+        after = _comparison_text(page_text[end : min(len(page_text), end + 20)])
+        scheduled_interval = bool(
+            re.search(r"\b(?:SERVICIO|MANTENIMIENTO)\b.{0,45}$", before)
+            and re.match(r"\s*KMS?\.?\b", after)
+        )
+        if scheduled_interval:
+            continue  # "Servicio de 6,000 Kms." es un intervalo comercial, no el odómetro real.
         has_labeled_context = bool(re.search(r"\b(KILOMETRAJE|KILOMETROS?|ODOMETRO)\b", context))
-        has_km_context = bool(re.search(r"\bKM\b", context))
+        has_km_context = bool(re.search(r"\bKMS?\b", context))
+        has_explicit_km_label = bool(
+            re.search(r"\bKMS?\.?\s*:?\s*$", before)
+            or re.match(r"\s*KMS?\.?\b", after)
+        )
         if not has_labeled_context and not has_km_context:
             continue  # Un número sin evidencia semántica no se trata como odómetro.
         score = 1
         if raw.lstrip().startswith("0") and len(re.sub(r"\D", "", raw)) >= 6:
             score -= 6  # Códigos de operación/refacción suelen tener ceros iniciales.
-        if re.search(r"\b(KILOMETRAJE|ODOMETRO|KM\.?\s*(ENTRADA|ENT\.?|ACTUAL)?)\b", context):
+        if has_labeled_context or has_explicit_km_label:
             score += 8
         if DATE_PATTERN.search(page_text[end : min(len(page_text), end + 30)]):
             score += 4
@@ -233,7 +265,7 @@ def extract_mileage(pages: list[tuple[int, str]], words: list[LayoutWord] | None
             score += 4
         if re.search(r"\b(SERVICIO|OPERACION|PARTE|COSTO|TOTAL|IVA|SUBTOTAL)\b", context):
             score -= 4
-        pattern_confidence = 0.97 if has_labeled_context else 0.84
+        pattern_confidence = 0.97 if has_labeled_context or has_explicit_km_label else 0.84
         confidence_score = _combined_pattern_token_confidence(
             pattern_confidence, _token_confidence(words or [], page_number, raw)
         )
@@ -402,8 +434,31 @@ def classify_service_event(
         )
     )
     scheduled_service = bool(
-        re.search(r"\bSERVICIO\s+(?:DE\s+)?\d+(?:\s|,)*(?:MIL|KM)\b", combined)
-        or re.search(r"\bSERVICIO\s+\d{1,3}(?:\s\d{3}|000)\s*KM\b", combined)
+        # La normalización convierte "12,000" en "12 000". Se aceptan
+        # ambas formas y la variante "Servicio de mantenimiento de ...".
+        re.search(
+            r"\bSERVICIO(?:\s+DE)?(?:\s+MANTENIMIENTO)?(?:\s+DE)?\s+"
+            r"\d{1,3}(?:\s+\d{3}|000)?\s+(?:MIL|KMS?)\b",
+            combined,
+        )
+        # Algunos distribuidores facturan los paquetes programados como
+        # S24SILVERADO, S36SILVERADO, etc. El número representa el intervalo
+        # en miles de kilómetros y el sufijo identifica el modelo.
+        or any(
+            6 <= int(interval) <= 300 and int(interval) % 6 == 0
+            for interval, _model in re.findall(
+                r"\bS(\d{1,3})([A-Z]{3,})(?=\s|$)", combined
+            )
+        )
+        # Las órdenes suelen describir el paquete con ordinales en vez de
+        # repetir el kilometraje: "Primer mantenimiento" o
+        # "Quinto servicio programado".
+        or re.search(
+            r"\b(?:PRIMER(?:O)?|SEGUNDO|TERCER(?:O)?|CUARTO|QUINTO|SEXTO|"
+            r"SEPTIMO|OCTAVO|NOVENO|DECIMO)\s+"
+            r"(?:SERVICIO|MANTENIMIENTO)(?:\s+(?:PROGRAMADO|DE\s+CORTESIA))?\b",
+            combined,
+        )
     )
     complementary = any(
         phrase in combined
@@ -518,10 +573,15 @@ def _field_from_spatial_candidates(
         return FieldValue()
     ranked = sorted(candidates, key=lambda candidate: candidate["score"], reverse=True)
     selected_value = ranked[0]["value"]
-    distinct_values = {candidate["value"] for candidate in ranked}
+    value_counts = Counter(candidate["value"] for candidate in ranked)
+    selected_occurrences = value_counts[selected_value]
     ambiguous = force_ambiguous or any(
         candidate["value"] != selected_value
         and candidate["score"] >= ranked[0]["score"] - 0.08
+        and (
+            not is_date
+            or value_counts[candidate["value"]] >= selected_occurrences
+        )
         for candidate in ranked[1:]
     )
     selected_score = min(ranked[0]["score"], 0.75) if ambiguous else ranked[0]["score"]
@@ -559,13 +619,30 @@ def extract_spatial_date(words: list[LayoutWord]) -> FieldValue:
                     value_word = min(values, key=lambda word: word.x0)
                     normalized = _normalize_date(value_word.text)
                     assert normalized is not None
+                    qualifier = " ".join(
+                        _semantic_text(word.text)
+                        for word in line.words
+                        if label_word.x1 <= word.x0 < value_word.x0
+                    )
+                    if "SERVICIO" in qualifier:
+                        base_score = 0.995
+                        reason = "Fecha identificada explícitamente como fecha de servicio."
+                    elif any(
+                        token in qualifier
+                        for token in ("EMISION", "CERTIFICACION", "TIMBRADO", "VENCIMIENTO")
+                    ):
+                        base_score = 0.82
+                        reason = "Fecha documental secundaria; no sustituye la fecha de servicio."
+                    else:
+                        base_score = 0.93
+                        reason = "Fecha situada a la derecha de la etiqueta Fecha."
                     candidates.append(_spatial_candidate(
                         value=normalized,
                         raw=value_word.text,
                         label="Fecha",
                         word=value_word,
-                        score=_combined_pattern_token_confidence(0.99, value_word.confidence),
-                        reasons=["Fecha situada a la derecha de la etiqueta Fecha."],
+                        score=_combined_pattern_token_confidence(base_score, value_word.confidence),
+                        reasons=[reason],
                     ))
             if label in {"REPAR", "REPARACION"} or label.endswith("REPAR"):
                 below = [
@@ -613,8 +690,21 @@ def extract_spatial_mileage(words: list[LayoutWord]) -> FieldValue:
     for line in lines:
         for label_word in line.words:
             label = _semantic_text(label_word.text)
-            if label not in {"KM ENT", "KM SAL", "KILOMETRAJE", "ODOMETRO", "ODOMETER"}:
+            if label not in {"KM", "KMS", "KM ENT", "KM SAL", "KILOMETRAJE", "ODOMETRO", "ODOMETER"}:
                 continue
+            if label in {"KM", "KMS"}:
+                label_index = line.words.index(label_word)
+                previous_word = line.words[label_index - 1] if label_index else None
+                # En "9,842 km 10,000 km", ambos "km" son unidades que
+                # siguen a una cifra, no etiquetas del odómetro. Sólo se
+                # acepta KM/KMS como etiqueta cuando precede al valor, como
+                # en "Kms. 46145" o "KM: 105849".
+                if (
+                    previous_word is not None
+                    and _integer_word_value(previous_word) is not None
+                    and 0 <= label_word.x0 - previous_word.x1 <= 25
+                ):
+                    continue
             same_line = [
                 word for word in line.words
                 if word.x0 >= label_word.x1
@@ -973,7 +1063,111 @@ def parse_service_history(result: ExtractionResult, fields: dict[str, FieldValue
     )
 
 
+def _parse_specialized_image(result: ExtractionResult) -> ParsedDocument:
+    """Convierte resultados fecha+km en el contrato neutral que consume VAL-002."""
+    payloads = result.metadata.get("maintenance_image_events", [])
+    events: list[ParsedServiceEvent] = []
+    for payload in payloads:
+        date_payload = payload.get("service_date") or {}
+        mileage_payload = payload.get("mileage") or {}
+        normalized_date = date_payload.get("normalized_value")
+        try:
+            parsed_date = date.fromisoformat(normalized_date) if normalized_date else None
+        except (TypeError, ValueError):
+            parsed_date = None
+        normalized_mileage = mileage_payload.get("normalized_value")
+        try:
+            parsed_mileage = int(normalized_mileage) if normalized_mileage is not None else None
+        except (TypeError, ValueError):
+            parsed_mileage = None
+
+        def candidates(field_payload: dict[str, Any], label: str) -> list[dict[str, Any]]:
+            return [
+                {
+                    **candidate,
+                    "value": candidate.get("normalized_value"),
+                    "rawText": candidate.get("raw_value"),
+                    "label": label,
+                    "page": 1,
+                    "boundingBox": payload.get("region"),
+                    "score": candidate.get("confidence_score", 0.0),
+                    "reasons": ["Consenso entre variantes preprocesadas del recorte especializado."],
+                }
+                for candidate in field_payload.get("candidates", [])
+            ]
+
+        service_date = FieldValue(
+            raw_value=date_payload.get("raw_value"),
+            normalized_value=parsed_date,
+            confidence=date_payload.get("confidence", "low"),
+            source_page=1,
+            confidence_score=float(date_payload.get("confidence_score", 0.0)),
+            candidates=candidates(date_payload, "Fecha"),
+            ambiguous=bool(date_payload.get("ambiguous")),
+            evidence_metadata={
+                "crop_id": date_payload.get("crop_id"),
+                "field_type": "date",
+                "region": payload.get("region"),
+            },
+        )
+        mileage = FieldValue(
+            raw_value=mileage_payload.get("raw_value"),
+            normalized_value=parsed_mileage,
+            confidence=mileage_payload.get("confidence", "low"),
+            source_page=1,
+            confidence_score=float(mileage_payload.get("confidence_score", 0.0)),
+            candidates=candidates(mileage_payload, "Kilometraje"),
+            ambiguous=bool(mileage_payload.get("ambiguous")),
+            evidence_metadata={
+                "crop_id": mileage_payload.get("crop_id"),
+                "field_type": "mileage",
+                "region": payload.get("region"),
+            },
+        )
+        pair_score = min(service_date.confidence_score, mileage.confidence_score)
+        warnings = list(payload.get("warnings") or [])
+        if service_date.normalized_value is None and not any("fecha" in item.lower() for item in warnings):
+            warnings.append("No se detectó una fecha de servicio confiable.")
+        if mileage.normalized_value is None and not any("kilometraje" in item.lower() for item in warnings):
+            warnings.append("No se detectó un kilometraje confiable.")
+        events.append(ParsedServiceEvent(
+            service_date=service_date,
+            mileage=mileage,
+            repair_order_number=FieldValue(),
+            dealer=FieldValue(),
+            service_category="preventive_maintenance",
+            service_type="Mantenimiento preventivo",
+            description="Registro de mantenimiento detectado en imagen.",
+            works=["Registro de mantenimiento"],
+            work_evidence=[{"source": "service_box", "region": payload.get("region")}],
+            resets_maintenance_interval=True,
+            confidence=_confidence_label(pair_score),
+            requires_human_review=bool(payload.get("requires_human_review", True)),
+            confidence_score=pair_score,
+            warnings=warnings,
+        ))
+
+    pages = [(page.page_number, page.text) for page in result.pages if page.text]
+    fields = extract_vehicle(pages) if pages else {}
+    review_count = sum(event.requires_human_review for event in events)
+    return ParsedDocument(
+        document_type="registro_mantenimiento",
+        confidence="high" if events and not review_count else "medium" if events else "low",
+        fields=fields,
+        service_events=events,
+        warnings=list(result.warnings),
+        layout_debug={
+            "strategy": "specialized_service_boxes",
+            "event_count": len(events),
+            "review_count": review_count,
+            "external_fallback_used": False,
+        },
+    )
+
+
 def parse_document(result: ExtractionResult) -> ParsedDocument:
+    if isinstance(result.metadata.get("maintenance_image_events"), list):
+        return _parse_specialized_image(result)
     pages = [(page.page_number, page.text) for page in result.pages if page.text]
     text = result.text
     if not text:
@@ -995,7 +1189,10 @@ def parse_document(result: ExtractionResult) -> ParsedDocument:
     description = " / ".join(lines) or None
     category, service_type, resets, review, classification_warnings = classify_service_event(
         works=lines,
-        description=description or text,
+        # `lines` se limita para presentar un resumen legible. La
+        # clasificación sí debe considerar el documento completo, pues la
+        # descripción del paquete puede aparecer después de varios encabezados.
+        description=text,
         document_type=document_type,
     )
     warnings = list(result.warnings)

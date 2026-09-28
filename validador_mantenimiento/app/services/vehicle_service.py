@@ -1,14 +1,22 @@
 from __future__ import annotations
 
 import re
+from pathlib import Path
 from typing import Optional
 
 from sqlalchemy import Select, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.models.audit_log import AuditLog
+from app.models.document import Document
+from app.models.document_analysis import DocumentAnalysis
+from app.models.maintenance import Maintenance
+from app.models.service_event import ServiceEvent
+from app.models.validation import Validation
 from app.models.vehicle import Vehicle
 from app.schemas.vehicle_schema import VehicleCreate, VehicleUpdate
+from app.services.training_dataset_service import resolve_evidence_crop
 
 
 class VehicleNotFoundError(Exception):
@@ -28,6 +36,18 @@ class ContractNumberImmutableError(Exception):
 
 
 class ContractDateRangeError(Exception):
+    pass
+
+
+class InitialOdometerImmutableError(Exception):
+    pass
+
+
+class VehicleBusinessDataError(Exception):
+    pass
+
+
+class VehicleDeletionError(Exception):
     pass
 
 
@@ -85,7 +105,7 @@ def get_next_contract_number(db: Session) -> str:
             if number is not None:
                 highest = number if highest is None else max(highest, number)
 
-    candidate = INITIAL_CONTRACT_NUMBER if highest is None else highest + 1
+    candidate = INITIAL_CONTRACT_NUMBER if highest is None else max(INITIAL_CONTRACT_NUMBER, highest + 1)
     if candidate > MAX_CONTRACT_NUMBER:
         raise ContractNumberUnavailableError("No hay números de contrato de seis dígitos disponibles.")
     return str(candidate).zfill(6)
@@ -150,10 +170,24 @@ def create_vehicle(db: Session, payload: VehicleCreate) -> Vehicle:
         db.refresh(vehicle)
         return vehicle
 
-    # El valor enviado por la vista es sólo una previsualización. La asignación
-    # final ocurre aquí para que nunca pueda editarse ni duplicarse desde el
-    # cliente. El índice único de `numero_contrato` es la garantía definitiva
-    # ante dos altas simultáneas; ante una colisión se vuelve a calcular.
+    # Un número leído del PDF pertenece al contrato y se conserva. Si el alta
+    # no lo incluye, el servidor continúa asignando el siguiente consecutivo.
+    if payload.numero_contrato is not None:
+        contract_number = payload.numero_contrato
+        vehicle = Vehicle(**_contract_vehicle_values(payload, contract_number))
+        db.add(vehicle)
+        try:
+            db.commit()
+        except IntegrityError as exc:
+            db.rollback()
+            raise DuplicateInternalNumberError(
+                f"El contrato {contract_number} ya está registrado."
+            ) from exc
+        db.refresh(vehicle)
+        return vehicle
+
+    # Para altas manuales, el índice único es la garantía definitiva ante dos
+    # solicitudes simultáneas; ante una colisión se vuelve a calcular.
     last_error: IntegrityError | None = None
     for _ in range(CONTRACT_CREATION_ATTEMPTS):
         contract_number = get_next_contract_number(db)
@@ -189,6 +223,20 @@ def update_vehicle(db: Session, vehicle_id: int, payload: VehicleUpdate) -> Vehi
         # formulario vigente y por los listados.
         values["kilometraje"] = values["current_odometer"]
 
+    if "initial_odometer" in values and vehicle.initial_odometer is not None:
+        if values["initial_odometer"] != vehicle.initial_odometer:
+            raise InitialOdometerImmutableError(
+                "El kilometraje al inicio del contrato no se puede modificar."
+            )
+        values.pop("initial_odometer")
+
+    target_condition = values.get("vehicle_condition", vehicle.vehicle_condition)
+    target_initial_odometer = values.get("initial_odometer", vehicle.initial_odometer)
+    if target_condition in {"new", "used"} and target_initial_odometer is None:
+        raise VehicleBusinessDataError(
+            "El kilometraje al inicio del contrato es obligatorio para Nuevo (M1) y Seminuevo (M2)."
+        )
+
     start_date = values.get("fecha_inicio_contrato", vehicle.fecha_inicio_contrato)
     end_date = values.get("fecha_fin_contrato", vehicle.fecha_fin_contrato)
     if start_date is not None and end_date is not None and end_date < start_date:
@@ -205,9 +253,69 @@ def update_vehicle(db: Session, vehicle_id: int, payload: VehicleUpdate) -> Vehi
     return vehicle
 
 
-def deactivate_vehicle(db: Session, vehicle_id: int) -> Vehicle:
+def delete_vehicle(db: Session, vehicle_id: int) -> None:
+    """Elimina el vehículo y todo su historial dependiente de forma explícita."""
     vehicle = get_vehicle_or_raise(db, vehicle_id)
-    vehicle.status = "inactive"
-    db.commit()
-    db.refresh(vehicle)
-    return vehicle
+    documents = list(
+        db.scalars(select(Document).where(Document.vehicle_id == vehicle_id))
+    )
+    document_ids = [document.id for document in documents]
+    events = list(
+        db.scalars(select(ServiceEvent).where(ServiceEvent.vehicle_id == vehicle_id))
+    )
+    validations = list(
+        db.scalars(select(Validation).where(Validation.vehicle_id == vehicle_id))
+    )
+    validation_ids = [validation.id for validation in validations]
+    document_paths = [Path(document.file_path) for document in documents]
+    evidence_paths: set[Path] = set()
+    for event in events:
+        evidence = event.field_evidence or {}
+        for field_name in ("date", "mileage_km"):
+            field = evidence.get(field_name)
+            crop_id = field.get("crop_id") if isinstance(field, dict) else None
+            if not crop_id:
+                continue
+            try:
+                evidence_paths.add(resolve_evidence_crop(str(crop_id)))
+            except ValueError:
+                continue
+
+    try:
+        if validation_ids:
+            for audit_log in db.scalars(
+                select(AuditLog).where(AuditLog.validation_id.in_(validation_ids))
+            ):
+                db.delete(audit_log)
+        for validation in validations:
+            db.delete(validation)
+        for event in events:
+            db.delete(event)
+        if document_ids:
+            for analysis in db.scalars(
+                select(DocumentAnalysis).where(
+                    DocumentAnalysis.document_id.in_(document_ids)
+                )
+            ):
+                db.delete(analysis)
+        for document in documents:
+            db.delete(document)
+        for maintenance in db.scalars(
+            select(Maintenance).where(Maintenance.vehicle_id == vehicle_id)
+        ):
+            db.delete(maintenance)
+        db.delete(vehicle)
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise VehicleDeletionError(
+            "No fue posible eliminar completamente el vehículo y sus datos asociados."
+        ) from exc
+
+    for path in [*document_paths, *evidence_paths]:
+        try:
+            path.unlink(missing_ok=True)
+        except OSError:
+            # La eliminación de la base ya fue confirmada. Un archivo huérfano
+            # no debe restaurar datos ni hacer parecer fallida la operación.
+            pass

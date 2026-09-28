@@ -1,5 +1,5 @@
 const AUDIT_LIMITS = Object.freeze({ maxFiles: 15, maxFileSize: 10 * 1024 * 1024, dateMonths: 6, mileageKm: 10000 })
-const AUDIT_TYPES = new Set(["image/jpeg", "image/png", "image/webp"])
+const AUDIT_TYPES = new Set(["application/pdf", "image/jpeg", "image/png", "image/webp"])
 
 // Fixture de demostración: no procede de OCR ni se persiste en el backend.
 const AUDIT_DEMO_RECORDS = Object.freeze([
@@ -8,7 +8,7 @@ const AUDIT_DEMO_RECORDS = Object.freeze([
   { id: "demo-03", date: "2024-01-06", mileage: 40123, sourceFileName: "sello-tenue.jpg", sourceType: "image", confidence: 0.74, reviewStatus: "review", manuallyVerified: false, rawExtractedText: "06/01/2024 · 40?23 km" },
 ])
 
-const auditState = { files: [], records: [], showingResults: false, controller: null, failedItems: [], runId: null }
+const auditState = { files: [], records: [], history: null, showingResults: false, controller: null, failedItems: [], runId: null }
 const dropzone = document.querySelector("#audit-dropzone")
 const fileInput = document.querySelector("#audit-files")
 const uploadError = document.querySelector("#audit-upload-error")
@@ -88,9 +88,9 @@ function calculateAudit(records) {
 }
 
 function validateFiles(files) {
-  if (files.length > AUDIT_LIMITS.maxFiles) return `Puedes seleccionar hasta ${AUDIT_LIMITS.maxFiles} imágenes por análisis.`
+  if (files.length > AUDIT_LIMITS.maxFiles) return `Puedes seleccionar hasta ${AUDIT_LIMITS.maxFiles} archivos por análisis.`
   const invalid = files.find((file) => !AUDIT_TYPES.has(file.type))
-  if (invalid) return `“${invalid.name}” no es JPG, PNG ni WEBP.`
+  if (invalid) return `“${invalid.name}” no es PDF, JPG, PNG ni WEBP.`
   const oversized = files.find((file) => file.size > AUDIT_LIMITS.maxFileSize)
   if (oversized) return `“${oversized.name}” supera el límite de 10 MB.`
   return ""
@@ -128,15 +128,21 @@ function renderPreviews() {
   const heading = document.createElement("div")
   heading.className = "audit-previews-heading"
   const completed = auditState.files.filter((item) => item.status === "completed").length
-  heading.innerHTML = `<strong>${auditState.files.length} ${auditState.files.length === 1 ? "imagen" : "imágenes"}</strong><span>${completed ? `${completed} procesadas` : "Listas para OCR"}</span>`
+  heading.innerHTML = `<strong>${auditState.files.length} ${auditState.files.length === 1 ? "archivo" : "archivos"}</strong><span>${completed ? `${completed} procesados` : "Listos para análisis local"}</span>`
   const list = document.createElement("div")
   list.className = "audit-preview-list"
   auditState.files.forEach((item) => {
     const preview = document.createElement("div")
     preview.className = "audit-preview"
-    const image = document.createElement("img")
-    image.src = item.previewUrl
-    image.alt = `Vista previa de ${item.file.name}`
+    const image = item.file.type === "application/pdf" ? document.createElement("div") : document.createElement("img")
+    if (item.file.type === "application/pdf") {
+      image.className = "audit-preview-document"
+      image.textContent = "PDF"
+      image.setAttribute("aria-label", `Documento PDF ${item.file.name}`)
+    } else {
+      image.src = item.previewUrl
+      image.alt = `Vista previa de ${item.file.name}`
+    }
     const remove = document.createElement("button")
     remove.type = "button"
     remove.dataset.fileId = item.id
@@ -147,7 +153,10 @@ function renderPreviews() {
     name.textContent = item.file.name
     const state = document.createElement("small")
     state.className = `audit-preview-state ${item.status}`
-    state.textContent = { pending: "Pendiente", processing: "Procesando", completed: "Lista", failed: "Error" }[item.status] || "Pendiente"
+    const completedText = item.requiresReview
+      ? "Revisión humana requerida"
+      : `${item.eventCount || 0} ${item.eventCount === 1 ? "mantenimiento detectado" : "mantenimientos detectados"}`
+    state.textContent = item.status === "completed" ? completedText : ({ pending: "Pendiente", processing: "Procesando", failed: "Error" }[item.status] || "Pendiente")
     preview.append(image, remove, name, state)
     list.append(preview)
   })
@@ -160,6 +169,29 @@ function statusMarkup(record) {
   return `<span class="audit-badge audit-badge-high">✓ Alta confianza · ${Math.round((record.confidence || 0) * 100)}%</span>`
 }
 
+function resultMarkup(record) {
+  const status = record.validationStatus
+  if (!status) return statusMarkup(record)
+  const labels = {
+    COMPLIANT: "Cumple", TOLERANCE_PERIOD: "En tolerancia", REQUIRES_REVIEW: "Revisión",
+    INSUFFICIENT_DATA: "Datos insuficientes", EXCEEDED_TIME: "Excede tiempo",
+    EXCEEDED_MILEAGE: "Excede km", EXCEEDED_BOTH: "Excede tiempo y km",
+  }
+  const ok = status === "COMPLIANT"
+  return `<span class="audit-badge ${ok ? "audit-badge-high" : "audit-badge-review"}">${ok ? "✓" : "△"} ${auditEscape(labels[status] || status)}</span>`
+}
+
+function reviewEvidenceMarkup(record) {
+  if (record.reviewStatus !== "review" || (!record.dateCropUrl && !record.mileageCropUrl)) return ""
+  return `<div class="audit-review-evidence">
+    ${record.dateCropUrl ? `<figure><img src="${auditEscape(record.dateCropUrl)}" alt="Recorte de la fecha"><figcaption>Fecha detectada: ${auditEscape(record.date || "—")}</figcaption></figure>` : ""}
+    ${record.mileageCropUrl ? `<figure><img src="${auditEscape(record.mileageCropUrl)}" alt="Recorte del kilometraje"><figcaption>Kilometraje detectado: ${auditEscape(record.mileage === "" ? "—" : record.mileage)}</figcaption></figure>` : ""}
+    ${record.eventId ? '<button class="button button-secondary" data-action="confirm" type="button">Confirmar lectura</button>' : ""}
+    <button class="button button-secondary" data-action="correct" type="button">Corregir</button>
+    <small>Corrige los campos directamente si la lectura no coincide con la imagen.</small>
+  </div>`
+}
+
 function intervalMarkup(interval, index) {
   const dateText = interval.withinDate ? `${interval.deltaDays} días · cumple` : `${interval.deltaDays} días · excede por ${interval.excessDays}`
   const mileageText = interval.withinMileage ? `${interval.deltaMileage >= 0 ? "+" : ""}${formatKm(interval.deltaMileage)} · cumple` : `${interval.deltaMileage >= 0 ? "+" : ""}${formatKm(interval.deltaMileage)} · excede por ${formatKm(interval.excessMileage)}`
@@ -170,39 +202,94 @@ function intervalMarkup(interval, index) {
   </article>`
 }
 
+function backendIntervalMarkup(row, index) {
+  const status = row.validation.status
+  const ok = status === "COMPLIANT" || status === "TOLERANCE_PERIOD"
+  return `<article class="audit-interval">
+    <div class="audit-interval-heading"><strong>Servicio #${String(index + 1).padStart(2, "0")}</strong><span>${formatDate(row.service_event.service_date)}</span></div>
+    <div class="audit-interval-badges"><span class="${ok ? "ok" : "bad"}">${auditEscape(status)}</span>${row.delta_km == null ? "" : `<span class="${row.delta_km >= 0 ? "ok" : "bad"}">${row.delta_km >= 0 ? "+" : ""}${formatKm(row.delta_km)}</span>`}</div>
+    <p>${auditEscape(row.validation.message)}</p>
+  </article>`
+}
+
 function renderResults() {
   const analysis = calculateAudit(auditState.records)
   auditState.records = analysis.records
   const pending = analysis.records.some((record) => record.reviewStatus === "review")
   const rows = analysis.records.map((record, index) => `<div class="audit-record-row" role="row" data-record-id="${auditEscape(record.id)}">
-    <span class="audit-record-number" role="cell">${String(index + 1).padStart(2, "0")}</span>
     <label class="audit-record-field" role="cell"><span>Fecha</span><input data-field="date" type="date" value="${auditEscape(record.date)}" aria-label="Fecha del mantenimiento ${index + 1}"></label>
     <label class="audit-record-field audit-mileage" role="cell"><span>Kilometraje</span><span><input data-field="mileage" type="number" min="0" step="1" value="${auditEscape(record.mileage)}" aria-label="Kilometraje del mantenimiento ${index + 1}"><small>km</small></span></label>
-    <span class="audit-source" role="cell"><span>${record.sourceType === "manual" ? "Manual" : "Imagen"}</span><small title="${auditEscape(record.sourceFileName)}">${auditEscape(record.sourceFileName)}</small></span>
-    <span role="cell">${statusMarkup(record)}</span>
+    <span role="cell">${auditEscape(record.elapsedTime || "—")}</span>
+    <span role="cell">${record.deltaKm == null ? "—" : `${record.deltaKm >= 0 ? "+" : ""}${formatKm(record.deltaKm)}`}</span>
+    <span role="cell">${resultMarkup(record)}</span>
+    <span class="audit-source" role="cell"><span>${record.sourceType === "manual" ? "Manual" : record.sourceType === "pdf" ? "PDF" : "Imagen"}</span><small title="${auditEscape(record.sourceFileName)}">${auditEscape(record.sourceFileName)}</small></span>
     <span role="cell"><button class="audit-delete" data-action="delete" type="button" aria-label="Eliminar registro ${index + 1}">⌫</button></span>
+    ${reviewEvidenceMarkup(record)}
   </div>`).join("")
-  const needsReview = analysis.overallStatus === "review"
+  const backendResult = auditState.history?.summary?.result
+  const needsReview = backendResult ? backendResult !== "COMPLIANT" : analysis.overallStatus === "review"
+  const verdictTitle = backendResult === "COMPLIANT" ? "Historial dentro de las reglas" : backendResult === "TOLERANCE_PERIOD" ? "Historial dentro de tolerancia" : "Se necesita revisión manual"
+  const verdictMessage = auditState.history?.summary?.message || (needsReview ? "Hay datos por confirmar, incompletos o inconsistentes. Revísalos antes de emitir el dictamen." : "Todos los registros están verificados y los intervalos cumplen los límites configurados.")
+  const intervals = auditState.history
+    ? auditState.history.rows.map(backendIntervalMarkup).join("")
+    : analysis.chronologicalIntervals.map(intervalMarkup).join("")
   resultPanel.innerHTML = `<section class="audit-history" aria-labelledby="audit-history-title">
     <div class="audit-section-heading"><div><h2 id="audit-history-title">Historial ordenado</h2><p>${analysis.records.length} mantenimientos · del más antiguo al más reciente</p></div>${pending ? '<span class="audit-badge audit-badge-review">△ Revisión pendiente</span>' : ""}</div>
-    <div class="audit-record-table" role="table" aria-label="Historial de mantenimiento editable"><div class="audit-record-row audit-record-head" role="row"><span role="columnheader">#</span><span role="columnheader">Fecha</span><span role="columnheader">Kilometraje</span><span role="columnheader">Fuente</span><span role="columnheader">Estado</span><span role="columnheader">Acción</span></div>${rows}</div>
+    <div class="audit-record-table" role="table" aria-label="Historial de mantenimiento editable"><div class="audit-record-row audit-record-head" role="row"><span role="columnheader">Fecha</span><span role="columnheader">Kilometraje</span><span role="columnheader">Tiempo desde anterior</span><span role="columnheader">Km desde anterior</span><span role="columnheader">Resultado</span><span role="columnheader">Documento</span><span role="columnheader">Acción</span></div>${rows}</div>
     <div class="audit-record-footer"><p>Editar fecha o kilometraje marca el registro como verificado manualmente.</p><button class="audit-text-button" data-action="add" type="button">＋ Agregar registro</button></div>
   </section>
   <section class="audit-verdict ${needsReview ? "needs-review" : "compliant"}" aria-labelledby="audit-verdict-title">
-    <div class="audit-verdict-heading"><span aria-hidden="true">${needsReview ? "△" : "✓"}</span><div><h2 id="audit-verdict-title">${needsReview ? "Se necesita revisión manual" : "Historial dentro de las reglas"}</h2><p>${needsReview ? "Hay datos por confirmar, incompletos o inconsistentes. Revísalos antes de emitir el dictamen." : "Todos los registros están verificados y los intervalos cumplen los límites configurados."}</p></div></div>
-    <div class="audit-interval-list">${analysis.chronologicalIntervals.map(intervalMarkup).join("") || '<p class="audit-no-intervals">Agrega al menos dos registros completos para comparar intervalos.</p>'}</div>
+    <div class="audit-verdict-heading"><span aria-hidden="true">${needsReview ? "△" : "✓"}</span><div><h2 id="audit-verdict-title">${verdictTitle}</h2><p>${auditEscape(verdictMessage)}</p></div></div>
+    <div class="audit-interval-list">${intervals || '<p class="audit-no-intervals">Agrega al menos un registro completo para validar el historial.</p>'}</div>
   </section>`
   newAction.classList.remove("hidden")
 }
 
+async function refreshBackendHistory() {
+  const eventIds = auditState.records.map((record) => record.eventId).filter(Boolean)
+  if (!eventIds.length || !vehicleSelect.value) {
+    auditState.history = null
+    return
+  }
+  auditState.history = await MaintenanceAnalysisAPI.validateHistory(Number(vehicleSelect.value), eventIds)
+  const historyRows = auditState.history?.rows || []
+  const rows = new Map(historyRows.map((row) => [row.service_event.id, row]))
+  const known = new Set(auditState.records.map((record) => record.eventId).filter(Boolean))
+  historyRows.forEach((row) => {
+    const event = row.service_event
+    if (known.has(event.id)) return
+    const evidence = event.field_evidence || {}
+    const name = row.document.original_filename || `Documento #${event.document_id}`
+    auditState.records.push({
+      id: `event-${event.id}`, eventId: event.id, documentId: event.document_id,
+      date: event.service_date || "", mileage: event.mileage_km ?? "", sourceFileName: name,
+      sourceType: name.toLowerCase().endsWith(".pdf") ? "pdf" : "image",
+      confidence: Number(evidence.combined_confidence ?? 0),
+      reviewStatus: event.user_confirmed ? "manual" : event.requires_human_review ? "review" : "confirmed",
+      manuallyVerified: event.user_confirmed, fieldEvidence: evidence, warnings: event.warnings || [],
+      dateCropUrl: evidence.date?.crop_id ? `/api/service-events/${event.id}/evidence/date` : null,
+      mileageCropUrl: evidence.mileage_km?.crop_id ? `/api/service-events/${event.id}/evidence/mileage_km` : null,
+    })
+  })
+  auditState.records.forEach((record) => {
+    const row = rows.get(record.eventId)
+    if (!row) return
+    record.elapsedTime = row.elapsed_time
+    record.deltaKm = row.delta_km
+    record.validationStatus = row.validation.status
+    record.validationMessage = row.validation.message
+    record.sourceFileName = row.document.original_filename || record.sourceFileName
+  })
+}
+
 async function processImages(items = auditState.files, { retry = false } = {}) {
   if (!vehicleSelect.value) {
-    showPartialError("Selecciona el vehículo al que pertenecen las imágenes.")
+    showPartialError("Selecciona el vehículo al que pertenecen los documentos.")
     vehicleSelect.focus()
     return
   }
   if (!items.length) {
-    showPartialError("Selecciona al menos una imagen para analizar.")
+    showPartialError("Selecciona al menos un documento para analizar.")
     return
   }
   if (auditState.controller) return
@@ -250,11 +337,13 @@ async function processImages(items = auditState.files, { retry = false } = {}) {
       if (item) {
         item.documentId = outcome.value.documentId
         item.status = "completed"
+        item.eventCount = outcome.value.records.length
+        item.requiresReview = outcome.value.records.some((record) => record.reviewStatus === "review")
       }
       if (outcome.value.records.length) newRecords.push(...outcome.value.records)
       else {
         if (item) item.status = "failed"
-        failures.push({ item, reason: new Error("No se detectaron registros de mantenimiento; revisa la imagen manualmente.") })
+        failures.push({ item, reason: new Error("No se detectaron registros de mantenimiento; revisa el documento manualmente.") })
       }
     } else {
       const item = auditState.files.find((candidate) => candidate.id === outcome.reason.itemId)
@@ -278,16 +367,21 @@ async function processImages(items = auditState.files, { retry = false } = {}) {
 
   if (auditState.records.length) {
     auditState.showingResults = true
+    try {
+      await refreshBackendHistory()
+    } catch (error) {
+      showPartialError(`Los eventos se guardaron, pero no fue posible recalcular VAL-002: ${error.message}`)
+    }
     renderResults()
   }
   if (wasCancelled) {
     showPartialError("El análisis fue cancelado. Los archivos pendientes no se procesaron.")
   } else if (failures.length) {
     const details = [...new Set(failures.map((failure) => failure.reason.message))].join(" · ")
-    showPartialError(`${failures.length} de ${items.length} imágenes no se completaron. ${details}`)
+    showPartialError(`${failures.length} de ${items.length} archivos no se completaron. ${details}`)
     retryButton.classList.remove("hidden")
   } else if (!auditState.records.length) {
-    showPartialError("El análisis terminó, pero no produjo registros. Revisa la imagen o agrega los datos manualmente.")
+    showPartialError("El análisis terminó, pero no produjo registros. Revisa el documento o agrega los datos manualmente.")
   }
 }
 
@@ -297,6 +391,7 @@ function resetAudit() {
   auditState.files.forEach((item) => URL.revokeObjectURL(item.previewUrl))
   auditState.files = []
   auditState.records = []
+  auditState.history = null
   auditState.showingResults = false
   auditState.controller = null
   auditState.failedItems = []
@@ -365,6 +460,7 @@ resultPanel.addEventListener("change", async (event) => {
       field === "mileage" ? { mileage_km: value === "" ? null : value } : { service_date: value || null },
     )
     Object.assign(record, updated)
+    await refreshBackendHistory()
     showPartialError("")
   } catch (error) {
     Object.assign(record, previous)
@@ -372,9 +468,28 @@ resultPanel.addEventListener("change", async (event) => {
   }
   renderResults()
 })
-resultPanel.addEventListener("click", (event) => {
+resultPanel.addEventListener("click", async (event) => {
   const action = event.target.closest("button[data-action]")
   if (!action) return
+  if (action.dataset.action === "correct") {
+    action.closest("[data-record-id]").querySelector('input[data-field="date"]')?.focus()
+    return
+  }
+  if (action.dataset.action === "confirm") {
+    const id = action.closest("[data-record-id]").dataset.recordId
+    const record = auditState.records.find((item) => item.id === id)
+    if (!record) return
+    action.disabled = true
+    try {
+      Object.assign(record, await MaintenanceAnalysisAPI.confirmRecord(record))
+      await refreshBackendHistory()
+      showPartialError("")
+    } catch (error) {
+      showPartialError(`No fue posible confirmar la lectura: ${error.message}`)
+    }
+    renderResults()
+    return
+  }
   if (action.dataset.action === "delete") {
     const id = action.closest("[data-record-id]").dataset.recordId
     auditState.records = auditState.records.filter((record) => record.id !== id)

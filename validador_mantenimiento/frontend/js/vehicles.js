@@ -7,15 +7,28 @@ const vehicleForm = document.querySelector("#vehicle-form")
 const vehicleNotice = document.querySelector("#vehicle-notice")
 const vehicleSearch = document.querySelector("#vehicle-search")
 const vehiclesTable = document.querySelector("#vehicles-table")
+const deleteDialog = document.querySelector("#vehicle-delete-dialog")
+const deleteForm = document.querySelector("#vehicle-delete-form")
+const deleteCancel = document.querySelector("#cancel-vehicle-delete")
+const deleteConfirm = document.querySelector("#confirm-vehicle-delete")
+const deleteError = document.querySelector("#vehicle-delete-error")
+const contractPdfInput = document.querySelector("#contract-pdf")
+const contractUploadLabel = document.querySelector("#contract-upload-label")
+const contractUploadStatus = document.querySelector("#contract-upload-status")
 let vehicles = []
 let listedVehicles = []
+let manufacturerRules = []
 let editingVehicleId = null
+let pendingDeleteVehicleId = null
 let contractRequest = 0
+let contractExtractionRequest = 0
+let extractedContractNumber = null
 
 const requiredFields = {
-  brand: "Marca",
+  vehicle_condition: "Condición del vehículo",
   model: "Modelo",
   kilometraje: "Kilometraje",
+  initial_odometer: "Kilometraje al inicio del contrato",
   fecha_factura_origen: "Fecha factura de origen",
   fecha_inicio_contrato: "Fecha inicio de contrato",
   fecha_fin_contrato: "Fecha fin de contrato",
@@ -102,8 +115,17 @@ function clearNotice() {
   vehicleNotice.className = "notice"
 }
 
+function showContractUploadStatus(message = "", type = "") {
+  contractUploadStatus.textContent = message
+  contractUploadStatus.className = `contract-upload-status${type ? ` ${type}` : ""}`
+}
+
 function vehicleMileage(record) {
   return record?.kilometraje ?? record?.current_odometer
+}
+
+function conditionLabel(value) {
+  return value === "new" ? "Nuevo (M1)" : value === "used" ? "Seminuevo (M2)" : "Sin definir"
 }
 
 function formatKilometers(value) {
@@ -127,14 +149,20 @@ function renderVehicles() {
     ? listedVehicles.map((vehicle) => {
       const contract = displayContract(vehicle)
       const canEdit = Boolean(contractNumberOf(vehicle))
+      const canDelete = Number.isSafeInteger(Number(vehicle?.id)) && Number(vehicle.id) > 0
+      const actions = [
+        canEdit ? `<button class="button button-secondary button-small" data-action="edit" data-id="${escapeHtml(vehicle.id)}" type="button">Editar</button>` : "",
+        canDelete ? `<button class="button button-danger button-small" data-action="delete" data-id="${escapeHtml(vehicle.id)}" type="button">Eliminar</button>` : "",
+      ].filter(Boolean).join("")
       return `<tr>
         <td><strong>${escapeHtml(contract || "—")}</strong></td>
+        <td>${escapeHtml(conditionLabel(vehicle?.vehicle_condition))}</td>
         <td>${escapeHtml(`${normalizeText(vehicle?.brand) || "—"} ${normalizeText(vehicle?.model) || ""}`.trim())}</td>
         <td>${escapeHtml(formatKilometers(vehicleMileage(vehicle)))}</td>
-        <td>${canEdit ? `<div class="actions"><button class="button button-secondary button-small" data-action="edit" data-id="${escapeHtml(vehicle.id)}" type="button">Editar</button></div>` : "—"}</td>
+        <td>${actions ? `<div class="actions">${actions}</div>` : "—"}</td>
       </tr>`
     }).join("")
-    : '<tr><td colspan="4" class="empty">No hay vehículos que coincidan con la búsqueda.</td></tr>'
+    : '<tr><td colspan="5" class="empty">No hay vehículos que coincidan con la búsqueda.</td></tr>'
 }
 
 function applySearch() {
@@ -151,6 +179,32 @@ async function loadVehicles({ announceError = true } = {}) {
     if (announceError) showNotice(error.message, "error")
     return null
   }
+}
+
+async function loadManufacturerRules() {
+  const select = vehicleForm.elements.brand_policy
+  try {
+    manufacturerRules = await API.get("/manufacturer-rules?active=true")
+    select.innerHTML = `<option value="">Selecciona una marca</option>${manufacturerRules.map((rule) => `<option value="${escapeHtml(rule.brand)}">${escapeHtml(rule.brand)} · ${rule.interval_months} meses / ${Number(rule.interval_km).toLocaleString("es-MX")} km</option>`).join("")}`
+  } catch (error) {
+    manufacturerRules = []
+    select.innerHTML = '<option value="">No fue posible cargar las políticas</option>'
+    showNotice(error.message, "error")
+  }
+}
+
+function updateBrandField() {
+  const isNew = vehicleForm.elements.vehicle_condition.value === "new"
+  const textField = document.querySelector("#brand-text-field")
+  const policyField = document.querySelector("#brand-policy-field")
+  const brandInput = vehicleForm.elements.brand
+  const policySelect = vehicleForm.elements.brand_policy
+  textField.classList.toggle("hidden", isNew)
+  policyField.classList.toggle("hidden", !isNew)
+  brandInput.disabled = isNew
+  brandInput.required = !isNew
+  policySelect.disabled = !isNew
+  policySelect.required = isNew
 }
 
 function clearFieldErrors() {
@@ -184,11 +238,18 @@ async function setNewContract() {
 
 async function resetForm({ clearMessage = true } = {}) {
   editingVehicleId = null
+  extractedContractNumber = null
+  contractExtractionRequest += 1
   vehicleForm.reset()
+  contractPdfInput.disabled = false
+  contractUploadLabel.textContent = "Seleccionar contrato PDF"
+  showContractUploadStatus()
+  vehicleForm.elements.initial_odometer.readOnly = false
   clearFieldErrors()
   document.querySelector("#vehicle-form-title").textContent = "Registrar vehículo"
   document.querySelector("#vehicle-submit").textContent = "Guardar vehículo"
   document.querySelector("#cancel-edit").classList.add("hidden")
+  updateBrandField()
   if (clearMessage) clearNotice()
   await setNewContract()
 }
@@ -203,9 +264,11 @@ function isValidDate(value) {
 function formValues() {
   const data = Object.fromEntries(new FormData(vehicleForm))
   return {
-    brand: normalizeText(data.brand),
+    vehicle_condition: normalizeText(data.vehicle_condition),
+    brand: normalizeText(data.vehicle_condition === "new" ? data.brand_policy : data.brand),
     model: normalizeText(data.model),
     kilometraje: normalizeText(data.kilometraje),
+    initial_odometer: normalizeText(data.initial_odometer),
     fecha_factura_origen: normalizeText(data.fecha_factura_origen),
     numero_contrato: normalizeText(data.numero_contrato),
     fecha_inicio_contrato: normalizeText(data.fecha_inicio_contrato),
@@ -226,6 +289,10 @@ function validateForm(values) {
     if (!values[fieldName]) addError(fieldName, `${label} es obligatorio.`)
   })
 
+  if (!values.brand) {
+    addError(values.vehicle_condition === "new" ? "brand_policy" : "brand", "Marca es obligatoria.")
+  }
+
   if (!/^\d{6}$/.test(values.numero_contrato)) {
     addError("numero_contrato", "El número de contrato debe tener seis dígitos.")
   }
@@ -233,6 +300,10 @@ function validateForm(values) {
   const mileage = Number(values.kilometraje)
   if (values.kilometraje && (!Number.isInteger(mileage) || mileage < 0)) {
     addError("kilometraje", "El kilometraje debe ser un número entero igual o mayor a cero.")
+  }
+  const initialOdometer = Number(values.initial_odometer)
+  if (values.initial_odometer && (!Number.isInteger(initialOdometer) || initialOdometer < 0)) {
+    addError("initial_odometer", "El kilometraje inicial debe ser un número entero igual o mayor a cero.")
   }
 
   ["fecha_factura_origen", "fecha_inicio_contrato", "fecha_fin_contrato"].forEach((fieldName) => {
@@ -256,7 +327,7 @@ function validateForm(values) {
     return null
   }
 
-  return { ...values, kilometraje: mileage }
+  return { ...values, kilometraje: mileage, initial_odometer: initialOdometer }
 }
 
 function vehiclePayload(values, { includeContract = false } = {}) {
@@ -264,12 +335,83 @@ function vehiclePayload(values, { includeContract = false } = {}) {
     brand: values.brand,
     model: values.model,
     kilometraje: values.kilometraje,
+    vehicle_condition: values.vehicle_condition,
+    initial_odometer: values.initial_odometer,
     fecha_factura_origen: values.fecha_factura_origen,
     fecha_inicio_contrato: values.fecha_inicio_contrato,
     fecha_fin_contrato: values.fecha_fin_contrato,
   }
   if (includeContract) payload.numero_contrato = values.numero_contrato
   return payload
+}
+
+async function extractContractFromPdf(file) {
+  const requestId = ++contractExtractionRequest
+  extractedContractNumber = null
+  contractRequest += 1
+  contractPdfInput.disabled = true
+  contractUploadLabel.textContent = file.name
+  showContractUploadStatus("Leyendo los datos del contrato…", "loading")
+
+  try {
+    const result = await API.extractContract(file)
+    if (requestId !== contractExtractionRequest) return
+    const contract = sixDigitValue(result?.numero_contrato)
+    const dates = [
+      result?.fecha_factura_origen,
+      result?.fecha_inicio_contrato,
+      result?.fecha_fin_contrato,
+    ]
+    const initialOdometer = Number(result?.initial_odometer)
+    if (
+      !contract
+      || dates.some((value) => !isValidDate(value))
+      || !["new", "used"].includes(result?.vehicle_condition)
+      || !normalizeText(result?.brand)
+      || !normalizeText(result?.model)
+      || !Number.isInteger(initialOdometer)
+      || initialOdometer < 0
+    ) {
+      throw new Error("El contrato no devolvió todos los datos requeridos.")
+    }
+
+    vehicleForm.elements.vehicle_condition.value = result.vehicle_condition
+    updateBrandField()
+    if (result.vehicle_condition === "new") {
+      const matchingRule = manufacturerRules.find(
+        (rule) => normalizeText(rule.brand).localeCompare(
+          normalizeText(result.brand),
+          "es-MX",
+          { sensitivity: "base" },
+        ) === 0,
+      )
+      if (!matchingRule) {
+        throw new Error(`No existe una política activa para la marca ${result.brand}.`)
+      }
+      vehicleForm.elements.brand_policy.value = matchingRule.brand
+    } else {
+      vehicleForm.elements.brand.value = result.brand
+    }
+    vehicleForm.elements.model.value = result.model
+    vehicleForm.elements.initial_odometer.value = initialOdometer
+    vehicleForm.elements.numero_contrato.value = contract
+    vehicleForm.elements.fecha_factura_origen.value = result.fecha_factura_origen
+    vehicleForm.elements.fecha_inicio_contrato.value = result.fecha_inicio_contrato
+    vehicleForm.elements.fecha_fin_contrato.value = result.fecha_fin_contrato
+    extractedContractNumber = contract
+    clearFieldErrors()
+    showContractUploadStatus(
+      `Contrato ${contract} leído: ${initialOdometer.toLocaleString("es-MX")} km iniciales. Captura únicamente el kilometraje actual.`,
+      "success",
+    )
+  } catch (error) {
+    if (requestId !== contractExtractionRequest) return
+    contractUploadLabel.textContent = "Seleccionar otro contrato PDF"
+    showContractUploadStatus(error.message, "error")
+    await setNewContract()
+  } finally {
+    if (requestId === contractExtractionRequest) contractPdfInput.disabled = false
+  }
 }
 
 function isImportableLegacyVehicle(record) {
@@ -342,11 +484,24 @@ function startEditing(vehicleId) {
   }
 
   editingVehicleId = vehicleId
+  extractedContractNumber = null
+  contractExtractionRequest += 1
   contractRequest += 1
+  contractPdfInput.value = ""
+  contractPdfInput.disabled = true
+  contractUploadLabel.textContent = "Carga disponible al registrar un vehículo"
+  showContractUploadStatus("El contrato no se reemplaza durante la edición.")
   clearFieldErrors()
+  vehicleForm.elements.vehicle_condition.value = ["new", "used"].includes(vehicle?.vehicle_condition)
+    ? vehicle.vehicle_condition
+    : ""
+  updateBrandField()
   vehicleForm.elements.brand.value = vehicle?.brand ?? ""
+  vehicleForm.elements.brand_policy.value = vehicle?.vehicle_condition === "new" ? vehicle?.brand ?? "" : ""
   vehicleForm.elements.model.value = vehicle?.model ?? ""
   vehicleForm.elements.kilometraje.value = vehicleMileage(vehicle) ?? ""
+  vehicleForm.elements.initial_odometer.value = vehicle?.initial_odometer ?? ""
+  vehicleForm.elements.initial_odometer.readOnly = vehicle?.initial_odometer !== null && vehicle?.initial_odometer !== undefined
   vehicleForm.elements.fecha_factura_origen.value = vehicle?.fecha_factura_origen ?? ""
   vehicleForm.elements.numero_contrato.value = contract
   vehicleForm.elements.fecha_inicio_contrato.value = vehicle?.fecha_inicio_contrato ?? ""
@@ -356,6 +511,29 @@ function startEditing(vehicleId) {
   document.querySelector("#cancel-edit").classList.remove("hidden")
   clearNotice()
   window.scrollTo({ top: 0, behavior: "smooth" })
+}
+
+function closeDeleteDialog() {
+  pendingDeleteVehicleId = null
+  deleteError.textContent = ""
+  deleteError.className = "notice"
+  if (deleteDialog.open) deleteDialog.close()
+}
+
+function requestVehicleDeletion(vehicleId) {
+  const vehicle = vehicles.find((item) => item.id === vehicleId)
+  if (!vehicle) {
+    showNotice("No fue posible identificar el vehículo que se desea eliminar.", "error")
+    return
+  }
+
+  pendingDeleteVehicleId = vehicleId
+  document.querySelector("#delete-vehicle-contract").textContent = displayContract(vehicle) || "Sin número de contrato"
+  document.querySelector("#delete-vehicle-brand").textContent = normalizeText(vehicle.brand) || "—"
+  document.querySelector("#delete-vehicle-model").textContent = normalizeText(vehicle.model) || "—"
+  deleteError.textContent = ""
+  deleteError.className = "notice"
+  deleteDialog.showModal()
 }
 
 vehicleForm.addEventListener("submit", async (event) => {
@@ -371,7 +549,10 @@ vehicleForm.addEventListener("submit", async (event) => {
   try {
     const saved = isEditing
       ? await API.put(`/vehicles/${editingVehicleId}`, vehiclePayload(values))
-      : await API.post("/vehicles", vehiclePayload(values))
+      : await API.post(
+        "/vehicles",
+        vehiclePayload(values, { includeContract: extractedContractNumber === values.numero_contrato }),
+      )
     await loadVehicles({ announceError: false })
     await resetForm({ clearMessage: false })
     const savedContract = contractNumberOf(saved) || values.numero_contrato
@@ -386,6 +567,35 @@ vehicleForm.addEventListener("submit", async (event) => {
 vehiclesTable.addEventListener("click", (event) => {
   const button = event.target.closest("button[data-action]")
   if (button?.dataset.action === "edit") startEditing(Number(button.dataset.id))
+  if (button?.dataset.action === "delete") requestVehicleDeletion(Number(button.dataset.id))
+})
+
+deleteCancel.addEventListener("click", closeDeleteDialog)
+
+deleteDialog.addEventListener("cancel", (event) => {
+  event.preventDefault()
+  closeDeleteDialog()
+})
+
+deleteForm.addEventListener("submit", async (event) => {
+  event.preventDefault()
+  const vehicleId = pendingDeleteVehicleId
+  if (!vehicleId) return
+
+  deleteConfirm.disabled = true
+  try {
+    await API.remove(`/vehicles/${vehicleId}`)
+    vehicles = vehicles.filter((vehicle) => vehicle.id !== vehicleId)
+    applySearch()
+    if (editingVehicleId === vehicleId) await resetForm({ clearMessage: false })
+    closeDeleteDialog()
+    showNotice("Vehículo y datos asociados eliminados correctamente.", "success")
+  } catch (error) {
+    deleteError.textContent = error.message
+    deleteError.className = "notice error show"
+  } finally {
+    deleteConfirm.disabled = false
+  }
 })
 
 document.querySelector("#search-vehicles").addEventListener("click", async () => {
@@ -405,9 +615,23 @@ document.querySelector("#cancel-edit").addEventListener("click", async () => {
 
 vehicleForm.addEventListener("input", (event) => {
   if (typeof event.target.setCustomValidity === "function") event.target.setCustomValidity("")
+  if (event.target.name === "vehicle_condition") updateBrandField()
+})
+
+contractPdfInput.addEventListener("change", async () => {
+  const [file] = contractPdfInput.files
+  if (!file) {
+    extractedContractNumber = null
+    contractUploadLabel.textContent = "Seleccionar contrato PDF"
+    showContractUploadStatus()
+    await setNewContract()
+    return
+  }
+  await extractContractFromPdf(file)
 })
 
 async function initializeVehiclesPage() {
+  await loadManufacturerRules()
   const loaded = await loadVehicles()
   if (!loaded) return
 
