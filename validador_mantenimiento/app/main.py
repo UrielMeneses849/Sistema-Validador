@@ -5,6 +5,8 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.responses import Response
+from starlette.types import Scope
 
 from app.api import (
     dashboard,
@@ -18,6 +20,15 @@ from app.api import (
 )
 from app.core.config import FRONTEND_DIR, ensure_directories
 from app.database.init_db import init_db
+
+
+class FrontendStaticFiles(StaticFiles):
+    """Revalidate shared assets so every screen uses the current design."""
+
+    async def get_response(self, path: str, scope: Scope) -> Response:
+        response = await super().get_response(path, scope)
+        response.headers["Cache-Control"] = "no-cache"
+        return response
 
 
 @asynccontextmanager
@@ -43,13 +54,13 @@ app.include_router(service_events.router)
 app.include_router(history_validations.router)
 app.include_router(validations.router)
 
-app.mount("/css", StaticFiles(directory=FRONTEND_DIR / "css"), name="css")
-app.mount("/js", StaticFiles(directory=FRONTEND_DIR / "js"), name="js")
+app.mount("/css", FrontendStaticFiles(directory=FRONTEND_DIR / "css"), name="css")
+app.mount("/js", FrontendStaticFiles(directory=FRONTEND_DIR / "js"), name="js")
 
 
 @app.get("/", include_in_schema=False)
 def maintenance_audit_page() -> FileResponse:
-    return FileResponse(FRONTEND_DIR / "index.html")
+    return FileResponse(FRONTEND_DIR / "index.html", headers={"Cache-Control": "no-store"})
 
 
 @app.get("/{page_name}.html", include_in_schema=False)
@@ -62,10 +73,11 @@ def frontend_page(page_name: str) -> FileResponse:
         "validate_document",
         "results",
         "history",
+        "validate_images",
     }
     if page_name not in allowed_pages:
         raise HTTPException(status_code=404, detail="Pantalla no encontrada.")
-    page = FRONTEND_DIR / f"{page_name}.html"
+    page = FRONTEND_DIR / ("index.html" if page_name == "validate_images" else f"{page_name}.html")
     if not page.is_file():
         raise HTTPException(status_code=404, detail="Pantalla no encontrada.")
-    return FileResponse(page)
+    return FileResponse(page, headers={"Cache-Control": "no-store"})

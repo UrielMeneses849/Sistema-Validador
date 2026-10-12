@@ -25,7 +25,7 @@ function renderRules() {
       <td><span class="status status-${rule.active ? "COMPLIANT" : "REQUIRES_REVIEW"}">${rule.active ? "Activa" : "Inactiva"}</span></td>
       <td><div class="actions"><button class="button button-secondary button-small" data-action="edit" data-id="${rule.id}" type="button">Editar</button>${rule.active ? `<button class="button button-danger button-small" data-action="deactivate" data-id="${rule.id}" type="button">Desactivar</button>` : ""}</div></td>
     </tr>`).join("")
-    : '<tr><td colspan="5" class="empty">No hay políticas registradas.</td></tr>'
+    : '<tr><td colspan="5" class="empty">No hay reglas registradas.</td></tr>'
 }
 
 async function loadRules() {
@@ -34,7 +34,7 @@ async function loadRules() {
     renderRules()
   } catch (error) {
     UI.notice(ruleNotice, error.message, "error")
-    rulesTable.innerHTML = '<tr><td colspan="5" class="empty">No fue posible cargar las políticas.</td></tr>'
+    rulesTable.innerHTML = '<tr><td colspan="5" class="empty">No fue posible cargar las reglas.</td></tr>'
   }
 }
 
@@ -42,8 +42,8 @@ function resetRuleForm() {
   editingRuleId = null
   ruleForm.reset()
   ruleForm.elements.active.checked = true
-  document.querySelector("#rule-form-title").textContent = "Registrar política"
-  ruleSubmit.textContent = "Guardar política"
+  document.querySelector("#rule-form-title").textContent = "Registrar regla"
+  ruleSubmit.textContent = "Guardar regla"
   ruleCancel.classList.add("hidden")
 }
 
@@ -55,7 +55,7 @@ function startEditing(ruleId) {
   ruleForm.elements.interval_months.value = rule.interval_months
   ruleForm.elements.interval_km.value = rule.interval_km
   ruleForm.elements.active.checked = rule.active
-  document.querySelector("#rule-form-title").textContent = `Editar política de ${rule.brand}`
+  document.querySelector("#rule-form-title").textContent = `Editar regla de ${rule.brand}`
   ruleSubmit.textContent = "Guardar cambios"
   ruleCancel.classList.remove("hidden")
   UI.clearNotice(ruleNotice)
@@ -73,7 +73,7 @@ ruleForm.addEventListener("submit", async (event) => {
     }
     if (editingRuleId) await API.put(`/manufacturer-rules/${editingRuleId}`, payload)
     else await API.post("/manufacturer-rules", payload)
-    const message = editingRuleId ? "Política actualizada correctamente." : "Política registrada correctamente."
+    const message = editingRuleId ? "Regla actualizada correctamente." : "Regla registrada correctamente."
     resetRuleForm()
     await loadRules()
     UI.notice(ruleNotice, message, "success")
@@ -94,11 +94,11 @@ rulesTable.addEventListener("click", async (event) => {
   }
   if (button.dataset.action === "deactivate") {
     const rule = rules.find((item) => item.id === ruleId)
-    if (!window.confirm(`¿Desactivar la política de ${rule?.brand || "esta marca"}?`)) return
+    if (!window.confirm(`¿Desactivar la regla de ${rule?.brand || "esta marca"}?`)) return
     try {
       await API.remove(`/manufacturer-rules/${ruleId}`)
       await loadRules()
-      UI.notice(ruleNotice, "Política desactivada. Su historial se conserva.", "success")
+      UI.notice(ruleNotice, "Regla desactivada. Su historial se conserva.", "success")
     } catch (error) {
       UI.notice(ruleNotice, error.message, "error")
     }

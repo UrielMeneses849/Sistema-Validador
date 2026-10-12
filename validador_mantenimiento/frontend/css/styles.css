@@ -232,6 +232,10 @@ textarea { min-height: 84px; resize: vertical; } input:focus, select:focus, text
 .audit-record-table { width: 100%; overflow-x: auto; overscroll-behavior-inline: contain; }
 .audit-record-row { min-width: 980px; min-height: 61px; padding: 9px 16px; display: grid; grid-template-columns: minmax(126px, .9fr) minmax(135px, .95fr) minmax(115px, .8fr) minmax(100px, .7fr) minmax(125px, .9fr) minmax(110px, .8fr) 32px; align-items: center; gap: 7px; border-bottom: 1px solid var(--line); }
 .audit-record-head { min-height: 38px; padding-block: 6px; color: var(--muted); background: #f8fafb; font-size: 9px; font-weight: 700; }
+.audit-contract-reference { background: var(--teal-soft); border-left: 3px solid var(--teal); }
+.audit-contract-reference > span:first-child, .audit-contract-reference > span:nth-child(2) { display: grid; gap: 4px; }
+.audit-contract-reference small { color: var(--muted); font-size: 9px; }
+.audit-badge-reference { color: var(--teal); background: var(--teal-soft); border-color: var(--teal); }
 .audit-record-number { color: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 10px; }
 .audit-record-field { min-width: 0; }
 .audit-record-field > span:first-child { display: none; }

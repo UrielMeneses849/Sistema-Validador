@@ -6,6 +6,7 @@ from pathlib import Path
 
 # Debe establecerse antes de importar la aplicación, que crea el engine.
 os.environ["DATABASE_URL"] = "sqlite:////private/tmp/validador_mantenimiento_tests.db"
+os.environ["VISION_OCR_ENABLED"] = "0"  # Las pruebas unitarias no dependen del OCR nativo instalado.
 PROJECT_DIR = Path(__file__).resolve().parents[1]
 if str(PROJECT_DIR) not in sys.path:
     sys.path.insert(0, str(PROJECT_DIR))

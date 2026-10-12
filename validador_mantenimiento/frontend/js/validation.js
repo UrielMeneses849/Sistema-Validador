@@ -117,6 +117,7 @@ function renderHistory(history, pdfUrls = new Map()) {
       <div><span>Revisión humana</span><strong>${summary.requires_review}</strong></div>
     </div>`
   result.classList.remove("hidden")
+  document.querySelector("#pdf-empty")?.classList.add("hidden")
   result.scrollIntoView({ behavior: "smooth", block: "start" })
 }
 
@@ -151,6 +152,8 @@ if (validationForm) {
 
   function syncAnalyzeButton() {
     validateButton.disabled = state.processing || !vehicleSelect.value || !state.items.length
+    fileInput.disabled = state.processing
+    vehicleSelect.disabled = state.processing
   }
 
   function renderFiles() {
@@ -175,6 +178,13 @@ if (validationForm) {
   }
 
   function addFiles(files) {
+    if (state.processing) return
+    const incoming = Array.from(files).filter((file) => !state.items.some((item) => item.key === fileKey(file)))
+    const fileError = MaintenanceAnalysisAPI.validateFiles([...state.items.map((item) => item.file), ...incoming], "pdf")
+    if (fileError) {
+      UI.notice(validationNotice, fileError, "error")
+      return
+    }
     clearPdfUrls()
     state.history = null
     const existing = new Set(state.items.map((item) => item.key))
@@ -191,6 +201,7 @@ if (validationForm) {
     if (rejected.length) UI.notice(validationNotice, `Sólo se admiten archivos PDF: ${rejected.join(", ")}.`, "error")
     else UI.clearNotice(validationNotice)
     historyResult.classList.add("hidden")
+    document.querySelector("#pdf-empty")?.classList.remove("hidden")
     renderFiles()
   }
 
@@ -249,6 +260,7 @@ if (validationForm) {
       state.items = []
       state.history = null
       historyResult.classList.add("hidden")
+      document.querySelector("#pdf-empty")?.classList.remove("hidden")
       renderFiles()
       UI.notice(validationNotice, "Se limpió la selección porque cambió el vehículo.", "info")
     }

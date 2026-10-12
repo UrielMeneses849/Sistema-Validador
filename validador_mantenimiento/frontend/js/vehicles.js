@@ -151,6 +151,7 @@ function renderVehicles() {
       const canEdit = Boolean(contractNumberOf(vehicle))
       const canDelete = Number.isSafeInteger(Number(vehicle?.id)) && Number(vehicle.id) > 0
       const actions = [
+        canDelete ? `<a class="button button-secondary button-small" href="/register_maintenance.html?vehicle_id=${encodeURIComponent(vehicle.id)}&v=intelidrive-dark-3">Mantenimientos</a>` : "",
         canEdit ? `<button class="button button-secondary button-small" data-action="edit" data-id="${escapeHtml(vehicle.id)}" type="button">Editar</button>` : "",
         canDelete ? `<button class="button button-danger button-small" data-action="delete" data-id="${escapeHtml(vehicle.id)}" type="button">Eliminar</button>` : "",
       ].filter(Boolean).join("")

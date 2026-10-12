@@ -14,6 +14,7 @@ from collections import defaultdict
 from dataclasses import asdict, dataclass, field
 from datetime import date, timedelta
 from pathlib import Path
+from statistics import median
 from tempfile import TemporaryDirectory
 from typing import Any, Literal, Protocol
 
@@ -31,6 +32,7 @@ from app.core.config import (
     TESSERACT_CMD,
 )
 from app.services.ocr_debug_service import OcrDebugSession, box_payload
+from app.services.native_vision_backend import NativeVisionBackend
 from app.services.image_preprocessing import ImageVariantSet, prepare_image_variants
 
 
@@ -69,11 +71,12 @@ class BoundingBox:
         )
 
     def clamp(self, width: int, height: int) -> "BoundingBox":
+        x0 = max(0, min(self.x0, width - 1))
+        y0 = max(0, min(self.y0, height - 1))
         return BoundingBox(
-            max(0, min(self.x0, width - 1)),
-            max(0, min(self.y0, height - 1)),
-            max(1, min(self.x1, width)),
-            max(1, min(self.y1, height)),
+            x0, y0,
+            max(x0 + 1, min(self.x1, width)),
+            max(y0 + 1, min(self.y1, height)),
         )
 
 
@@ -236,6 +239,9 @@ def parse_date_candidates(text: str) -> list[tuple[str, str, float]]:
     """Devuelve (ISO, texto, calidad de formato), sin inferir valores ausentes."""
     candidates: list[tuple[str, str, float]] = []
     seen: set[tuple[str, str]] = set()
+    text = re.sub(r"\s*([/|])\s*", r"\1", text)
+    text = re.sub(r"(?<=\d)[Il|](?=\d)", "/", text)
+    text = re.sub(r"(?i)(?<=/)[06B]CT(?=/)", "OCT", text)
 
     def add(raw: str, parsed: date | None, quality: float) -> None:
         if parsed is None:
@@ -266,6 +272,13 @@ def parse_date_candidates(text: str) -> list[tuple[str, str, float]]:
     ):
         month_name, day, year = match.groups()
         add(match.group(0), _safe_date(_year(year), MONTHS[month_name], int(day)), 0.94 if len(year) == 4 else 0.84)
+    # Algunos OCR leen la barra manuscrita como '1'. Sólo admitir el campo
+    # completo dd/mm1aa; nunca reemplazar dígitos dentro de fechas ya válidas.
+    if not candidates:
+        match = re.fullmatch(r"\s*(\d{1,2})/(0[1-9]|1[0-2])1(\d{2}|20\d{2})\s*", text)
+        if match:
+            day, month, year = match.groups()
+            add(match.group(0), _safe_date(_year(year), int(month), int(day)), .65)
     return candidates
 
 
@@ -315,6 +328,14 @@ def parse_trocr_mileage_candidate(text: str) -> list[tuple[int, str, float]]:
     return [(value, match.group(1), quality)]
 
 
+def parse_native_mileage(text: str) -> list[tuple[int, str, float]]:
+    """Admite la etiqueta junto al número, pero rechaza folios, teléfonos y fragmentos."""
+    clean = re.sub(r"(?i)\b(?:kms?|millas)(?:\s*/\s*(?:km?|millas))?\b", "", text).strip()
+    if not re.fullmatch(r"\d{1,3}(?:[,. ]\d{3})+|\d{3,7}", clean):
+        return []
+    return parse_mileage_candidates(clean)
+
+
 def evaluate_consensus(
     field_type: FieldType,
     candidates: list[RecognitionCandidate],
@@ -345,13 +366,13 @@ def evaluate_consensus(
             score = min(score, 0.79)
         scored.append((round(score, 4), value, items))
     scored.sort(key=lambda item: (item[0], len(item[2])), reverse=True)
-    engine_values: dict[str, set[str | int]] = {"tesseract": set(), "trocr": set()}
+    engine_values: dict[str, set[str | int]] = {"tesseract": set(), "trocr": set(), "apple_vision_local": set()}
     for candidate in candidates:
-        engine = "trocr" if candidate.provider == "trocr_local" else "tesseract"
+        engine = "trocr" if candidate.provider == "trocr_local" else "apple_vision_local" if candidate.provider == "apple_vision_local" else "tesseract"
         engine_values[engine].add(candidate.normalized_value)
 
-    both_engines = bool(engine_values["tesseract"] and engine_values["trocr"])
-    common_values = engine_values["tesseract"] & engine_values["trocr"]
+    both_engines = sum(bool(values) for values in engine_values.values()) > 1
+    common_values = {value for value in grouped if sum(value in values for values in engine_values.values()) > 1}
     if common_values:
         eligible = [item for item in scored if item[1] in common_values]
         best_score, best_value, best_items = eligible[0]
@@ -377,6 +398,12 @@ def evaluate_consensus(
             else:
                 selection_reason = "Sólo Tesseract produjo un valor válido; se aplicaron las reglas normales."
     confidence = "high" if best_score >= OCR_REVIEW_THRESHOLD else "medium" if best_score >= 0.60 else "low"
+    if any(item.provider == "apple_vision_local" for item in best_items):
+        # La confianza de Vision no está calibrada para libretas con sellos.
+        # Variantes del mismo motor no cuentan como verificaciones independientes.
+        best_score = min(best_score, .84)
+        confidence = "medium" if best_score >= .60 else "low"
+        selection_reason = "Lectura local de macOS; confirma fecha y kilometraje contra la foto."
     public_candidates = []
     for score, value, items in scored:
         public_candidates.append({
@@ -385,7 +412,7 @@ def evaluate_consensus(
             "confidence_score": score,
             "variants": sorted({item.variant for item in items}),
             "providers": sorted({item.provider for item in items}),
-            "engines": sorted({"trocr" if item.provider == "trocr_local" else "tesseract" for item in items}),
+            "engines": sorted({"trocr" if item.provider == "trocr_local" else item.provider for item in items}),
             "support": len({(item.variant, item.provider) for item in items}),
             "selected": value == best_value,
         })
@@ -410,6 +437,22 @@ class TesseractFieldOcrBackend:
         self.language = language
 
     def detect_orientation(self, image: Image.Image) -> int | None:
+        # OSD puede confundir sellos diagonales y dejar la hoja de cabeza.
+        # Verificar las cuatro orientaciones con las etiquetas impresas del formato.
+        preview = image.copy()
+        preview.thumbnail((1500, 1500))
+        scores: dict[int, float] = {}
+        anchors = {"FECHA", "DATE", "MANTENIMIENTO", "SERVICIO", "MAINTENANCE",
+                   "SERVICE", "RECORD", "KILOMETRAJE", "MILLAS", "FIRMA", "REPAIR"}
+        for rotation in (0, 90, 180, 270):
+            tokens = self.read_layout(preview.rotate(-rotation, expand=True), variant="orientation")
+            scores[rotation] = sum(
+                1.0 + token.confidence for token in tokens
+                if any(word in anchors for word in _semantic(token.text).split())
+            )
+        best = max(scores, key=scores.get)
+        if scores[best] >= 3:
+            return best or None
         try:
             output = self.engine.image_to_osd(image, output_type=self.engine.Output.DICT)
             rotation = int(output.get("rotate", 0) or 0)
@@ -696,6 +739,10 @@ def _detect_rectangles(image_path: Path) -> list[BoundingBox]:
         cv2.morphologyEx(threshold, cv2.MORPH_OPEN, vertical_kernel),
     )
     contours, _ = cv2.findContours(lines, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+    # Los bordes redondeados o ligeramente inclinados desaparecen al abrir líneas.
+    raw_contours, _ = cv2.findContours(threshold, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
+    contours = list(contours) + [c for c in raw_contours
+        if cv2.contourArea(c) / max(1, cv2.boundingRect(c)[2] * cv2.boundingRect(c)[3]) > .65]
     page_area = image.shape[0] * image.shape[1]
     rectangles: list[BoundingBox] = []
     for contour in contours:
@@ -741,6 +788,15 @@ def _region_ink_metrics(
             cv2.getStructuringElement(cv2.MORPH_RECT, (1, max(15, field_height // 2))),
         )
         residual = cv2.bitwise_and(inverted, cv2.bitwise_not(cv2.bitwise_or(horizontal, vertical)))
+        # Las reglas fotografiadas no siempre son horizontales: quitar también
+        # segmentos largos inclinados antes de decidir si el cuadro tiene tinta.
+        import numpy as np
+        rules = cv2.HoughLinesP(inverted, 1, np.pi/180, max(15, field_width//4),
+                               minLineLength=max(20, field_width//2), maxLineGap=10)
+        if rules is not None:
+            for x0, y0, x1, y1 in rules[:, 0]:
+                if abs(y1-y0) <= max(4, abs(x1-x0)*.18):
+                    cv2.line(residual, (x0,y0), (x1,y1), 0, 4)
         _count, _labels, stats, _centroids = cv2.connectedComponentsWithStats(residual, 8)
         minimum_area = max(8, int(field.size * 0.0002))
         areas = stats[1:, cv2.CC_STAT_AREA]
@@ -909,6 +965,96 @@ class GenericServiceBoxStrategy:
         return unique
 
 
+class BookletGridStrategy:
+    """Recupera cuadritos con etiquetas tapadas usando la retícula impresa vecina.
+
+    Se exige evidencia de tres columnas y al menos dos filas; no se aplica a
+    facturas libres. Las coordenadas son del formato, nunca valores del servicio.
+    """
+
+    def detect(self, tokens, *, width, height, rectangles):
+        words = {_semantic(t.text) for t in tokens}
+        hyundai = any("REPAIR" in w for w in words) and any("DATE" in w for w in words)
+        gm = any("MANTENIMIENTO" in w for w in words) and any("MILLAS" in w for w in words)
+        if not (hyundai or gm):
+            return []
+        boxes = [r for r in rectangles if width * .14 < r.width < width * .38
+                 and height * .12 < r.height < height * .46 and 1.0 < r.width / r.height < 2.5]
+        if len(boxes) < 3:
+            return []
+
+        def clusters(items, key, tolerance):
+            groups = []
+            for item in sorted(items, key=key):
+                group = next((g for g in groups if abs(key(item) - median(key(x) for x in g)) < tolerance), None)
+                if group is None:
+                    groups.append([item])
+                else:
+                    group.append(item)
+            return groups
+
+        columns = clusters(boxes, lambda b: b.center[0], width * .075)
+        rows = clusters(boxes, lambda b: b.y1, height * .075)
+        if len(columns) != 3 or not 2 <= len(rows) <= 3:
+            return []
+        typical_height = median(b.height for b in boxes)
+        regions = []
+        for row in rows:
+            bottom = median(b.y1 for b in row)
+            complete = [b for b in row if b.height >= typical_height * .8]
+            if not complete:
+                return []
+            top = median(b.y0 for b in complete)
+            for column in columns:
+                matches = [b for b in row if b in column and b.height >= typical_height * .8]
+                if matches:
+                    box = max(matches, key=lambda b: b.width * b.height)
+                else:
+                    left, right = median(b.x0 for b in column), median(b.x1 for b in column)
+                    peers = [max([b for b in row if b in c and b.height >= typical_height*.8],
+                                 key=lambda b:b.width*b.height, default=None) for c in columns]
+                    peers = [b for b in peers if b is not None]
+                    inferred_top, inferred_bottom = top, bottom
+                    if len(peers) >= 2:
+                        a, b = peers[0], peers[-1]
+                        fraction = ((left+right)/2-a.center[0]) / max(1, b.center[0]-a.center[0])
+                        inferred_top = a.y0 + fraction*(b.y0-a.y0)
+                        inferred_bottom = a.y1 + fraction*(b.y1-a.y1)
+                    box = BoundingBox(int(left), int(inferred_top),
+                                      int(right), int(inferred_bottom)).clamp(width, height)
+
+                def crop(x0, y0, x1, y1):
+                    return BoundingBox(int(box.x0 + box.width*x0), int(box.y0 + box.height*y0),
+                                       int(box.x0 + box.width*x1), int(box.y0 + box.height*y1)).clamp(width, height)
+
+                if hyundai:
+                    date_crop = crop(.36, .10, .96, .32)
+                    mileage_crop = crop(.07, .30, .54, .46)
+                    for field_type in ("date", "mileage"):
+                        is_label = _is_date_label if field_type == "date" else _is_mileage_label
+                        labels = [t for t in tokens if is_label(t) and box.contains(t.box, 4)
+                                  and t.box.height < box.height*.13
+                                  and .05 < (t.box.center[1]-box.y0)/box.height < .48]
+                        if not labels:
+                            continue
+                        expected = box.y0 + box.height * (.2 if field_type == "date" else .35)
+                        label = min(labels, key=lambda t: abs(t.box.center[1]-expected))
+                        prior = date_crop if field_type == "date" else mileage_crop
+                        band = max(label.box.height * 1.3, box.height*.11)
+                        adjusted = BoundingBox(prior.x0, int(label.box.center[1]-band),
+                                               prior.x1, int(label.box.center[1]+band)).clamp(width,height)
+                        if field_type == "date":
+                            date_crop = adjusted
+                        else:
+                            mileage_crop = adjusted
+                else:
+                    date_crop = crop(.21, .44, .96, .67)
+                    mileage_crop = crop(.25, .64, .96, .83)
+                regions.append(ServiceRegion(box, date_crop, mileage_crop,
+                    strategy="booklet_grid:hyundai" if hyundai else "booklet_grid:gm"))
+        return regions
+
+
 class LocalMaintenanceImageRecognizer:
     """Pipeline especializado fecha+km. No transcribe ni envía la página a servicios externos."""
 
@@ -934,6 +1080,7 @@ class LocalMaintenanceImageRecognizer:
         self.debug_directory = Path(debug_directory)
         self.debug_run_id = debug_run_id
         self.strategy = GenericServiceBoxStrategy()
+        self.native_recognizer = NativeVisionBackend()
 
     def _collect_candidates(
         self,
@@ -973,6 +1120,37 @@ class LocalMaintenanceImageRecognizer:
                     variant=variant,
                     provider=reading.provider,
                 ))
+        if self.native_recognizer.configured:
+            with Image.open(variants.variants["original"]) as image:
+                field_image = image.crop((crop.x0, crop.y0, crop.x1, crop.y1)).convert("RGB")
+            from app.services.image_preprocessing import field_reading_variants
+            for variant, field_image_variant in field_reading_variants(field_image).items():
+                try:
+                    reading = self.native_recognizer.read(field_image_variant)
+                    # Una línea de sello con varios números no es un odómetro.
+                    parsed = []
+                    lines = reading["text"].splitlines()
+                    if field_type == "mileage" and sum(bool(re.fullmatch(r"[\d,. ]+", line.strip())) for line in lines) > 1:
+                        # No elegir la mitad de un número dividido en dos observaciones.
+                        lines = []
+                    for line in lines:
+                        if field_type == "mileage":
+                            parsed.extend(parse_native_mileage(line))
+                        else:
+                            parsed.extend(parse_date_candidates(line))
+                    attempts.append({"variant": variant, "provider": self.native_recognizer.name,
+                        "raw_text": reading["text"], "ocr_confidence": reading["confidence"],
+                        "parsed_candidates": [{"normalized_value": n, "raw_value": r, "format_confidence": q}
+                                              for n, r, q in parsed]})
+                    for normalized, raw, quality in parsed:
+                        candidates.append(RecognitionCandidate(raw, normalized, min(.85, reading["confidence"]),
+                            quality, variant, self.native_recognizer.name))
+                except (OSError, ValueError, RuntimeError) as exc:
+                    self.native_recognizer.failure = str(exc)
+                    self.native_recognizer.close()
+                    attempts.append({"variant": variant, "provider": self.native_recognizer.name,
+                                     "error": str(exc), "parsed_candidates": []})
+                    break
         if self.handwriting_recognizer.configured:
             for variant in self.handwriting_variants:
                 path = variants.variants.get(variant)
@@ -1017,6 +1195,39 @@ class LocalMaintenanceImageRecognizer:
                     break
         return candidates, attempts
 
+    def _context_candidates(self, variants, region):
+        results = {"date": ([], []), "mileage": ([], [])}
+        if not self.native_recognizer.configured:
+            return results
+        try:
+            with Image.open(variants.variants["original"]) as image:
+                box = region.box
+                context = image.crop((box.x0, box.y0, box.x1, box.y1))
+            reading = self.native_recognizer.read(context)
+            for field_type, crop in (("date", region.date_crop), ("mileage", region.mileage_crop)):
+                candidates, attempts = results[field_type]
+                for observation in reading.get("observations", []):
+                    cx = box.x0 + (observation["x"] + observation["width"]/2)*box.width
+                    cy = box.y0 + (observation["y"] + observation["height"]/2)*box.height
+                    if not (crop.x0 <= cx <= crop.x1 and crop.y0 <= cy <= crop.y1):
+                        continue
+                    text = observation["text"]
+                    if field_type == "date":
+                        parsed = parse_date_candidates(text)
+                    else:
+                        parsed = parse_native_mileage(text)
+                    for value, raw, quality in parsed:
+                        candidates.append(RecognitionCandidate(raw, value, min(.85, observation["confidence"]),
+                            quality, "service_context", self.native_recognizer.name))
+                    attempts.append({"variant": "service_context", "provider": self.native_recognizer.name,
+                        "raw_text": text, "ocr_confidence": observation["confidence"],
+                        "parsed_candidates": [{"normalized_value": n, "raw_value": r, "format_confidence": q}
+                                              for n,r,q in parsed]})
+        except (OSError, ValueError, RuntimeError) as exc:
+            self.native_recognizer.failure = str(exc)
+            self.native_recognizer.close()
+        return results
+
     @staticmethod
     def _decision_payload(
         recognized: RecognizedField,
@@ -1029,8 +1240,9 @@ class LocalMaintenanceImageRecognizer:
 
         return {
             "tesseract_candidates": attempts_for("tesseract")
-            or [item for item in attempts if item.get("provider") != "trocr_local"],
+            or [item for item in attempts if item.get("provider") not in {"trocr_local", "apple_vision_local"}],
             "trocr_candidates": attempts_for("trocr_local"),
+            "native_vision_candidates": attempts_for("apple_vision_local"),
             "selected_candidate": recognized.normalized_value,
             "selected_raw_value": recognized.raw_value,
             "selection_reason": recognized.selection_reason,
@@ -1051,6 +1263,13 @@ class LocalMaintenanceImageRecognizer:
         return relative.as_posix()
 
     def analyze(self, image_path: str | Path) -> RecognitionResult:
+        try:
+            return self._analyze(image_path)
+        finally:
+            self.handwriting_recognizer.close()
+            self.native_recognizer.close()
+
+    def _analyze(self, image_path: str | Path) -> RecognitionResult:
         source = Path(image_path)
         source_key = re.sub(r"[^A-Za-z0-9_.-]", "_", source.stem)[:80] or "image"
         debug = OcrDebugSession(
@@ -1059,6 +1278,8 @@ class LocalMaintenanceImageRecognizer:
             run_id=self.debug_run_id or source_key,
         )
         diagnostics = [self.handwriting_recognizer.diagnostic(), "Fallback externo desactivado."]
+        if self.native_recognizer.configured:
+            diagnostics.append("OCR de macOS disponible: procesamiento local por campo y cuadro.")
         events: list[RecognizedServiceEvent] = []
         debug_regions: list[dict[str, Any]] = []
         event_report_indices: list[int] = []
@@ -1076,8 +1297,10 @@ class LocalMaintenanceImageRecognizer:
                     variant_tokens = self.ocr_backend.read_layout(image, variant=variant)
                 layout_options.append((variant_tokens, variant))
             tokens = _merge_layout_tokens(layout_options)
-            rectangles = _detect_rectangles(variants.variants["adaptive_threshold"])
-            regions = self.strategy.detect(tokens, width=variants.width, height=variants.height, rectangles=rectangles)
+            rectangles = _detect_rectangles(variants.variants["original"])
+            regions = BookletGridStrategy().detect(
+                tokens, width=variants.width, height=variants.height, rectangles=rectangles
+            ) or self.strategy.detect(tokens, width=variants.width, height=variants.height, rectangles=rectangles)
             variant_counts = ", ".join(
                 f"{variant}={len(variant_tokens)}"
                 for variant_tokens, variant in layout_options
@@ -1097,6 +1320,11 @@ class LocalMaintenanceImageRecognizer:
                 debug.capture_region(variants, index=region_index, region=region)
                 date_candidates, date_attempts = self._collect_candidates(variants, region.date_crop, "date")
                 mileage_candidates, mileage_attempts = self._collect_candidates(variants, region.mileage_crop, "mileage")
+                context_readings = self._context_candidates(variants, region)
+                date_candidates.extend(context_readings["date"][0])
+                date_attempts.extend(context_readings["date"][1])
+                mileage_candidates.extend(context_readings["mileage"][0])
+                mileage_attempts.extend(context_readings["mileage"][1])
                 ink_metrics = _region_ink_metrics(
                     variants.variants["original"],
                     (region.date_crop, region.mileage_crop),
@@ -1117,6 +1345,12 @@ class LocalMaintenanceImageRecognizer:
                 # Un cuadro con tinta pero sin lectura válida se conserva para revisión humana.
                 # El detector de tinta jamás aumenta la confianza ni acepta un valor.
                 has_visual_content = bool(ink_metrics and ink_metrics["has_content"])
+                if region.strategy.startswith("booklet_grid"):
+                    # El whitelist de Tesseract puede transformar una línea en '5'.
+                    mileage_candidates = [c for c in mileage_candidates if int(c.normalized_value) >= 100
+                                          and (c.provider != "tesseract" or c.ocr_confidence >= .25)]
+                    if ink_metrics and not has_visual_content:
+                        date_candidates, mileage_candidates = [], []
                 if not date_candidates and not mileage_candidates and not has_visual_content:
                     empty_date = evaluate_consensus(
                         "date", date_candidates, attempted_variants=len(self.recognition_variants)
@@ -1183,6 +1417,9 @@ class LocalMaintenanceImageRecognizer:
                 f"{self.handwriting_recognizer._model_load_seconds or 0.0:.4f} s."
             )
         self.handwriting_recognizer.close()
+        self.native_recognizer.close()
+        if self.native_recognizer.failure:
+            diagnostics.append(f"OCR de macOS no disponible: {self.native_recognizer.failure}")
 
         final_events = list(events)
         previous_layout_date: date | None = None
@@ -1238,19 +1475,14 @@ class LocalMaintenanceImageRecognizer:
 
         for event_index, report_index in enumerate(event_report_indices):
             debug_regions[report_index]["final_result"] = asdict(final_events[event_index])
+        providers = {self.ocr_backend.name}
+        providers.update(attempt["provider"] for region in debug_regions
+                         for attempts in region.get("ocr_attempts", {}).values()
+                         for attempt in attempts if not attempt.get("error"))
+        provider = "+".join(sorted(providers))
         debug.write_report({
             "source": str(source.resolve()),
-            "provider": (
-                f"{self.ocr_backend.name}+{self.handwriting_recognizer.name}"
-                if any(
-                    attempt.get("provider") == self.handwriting_recognizer.name
-                    for region in debug_regions
-                    for field_attempts in region.get("ocr_attempts", {}).values()
-                    for attempt in field_attempts
-                    if not attempt.get("error")
-                )
-                else self.ocr_backend.name
-            ),
+            "provider": provider,
             "boxes_detected": len(debug_regions),
             "detected_events": len(final_events),
             "regions": debug_regions,
@@ -1261,11 +1493,7 @@ class LocalMaintenanceImageRecognizer:
             diagnostics.append(f"Depuración OCR guardada en {debug.public_path}.")
         result = RecognitionResult(
             final_events,
-            (
-                f"{self.ocr_backend.name}+{self.handwriting_recognizer.name}"
-                if self.handwriting_recognizer._worker_device
-                else self.ocr_backend.name
-            ),
+            provider,
             diagnostics,
             debug_directory=debug.public_path,
         )
@@ -1280,6 +1508,7 @@ def local_ocr_diagnostics() -> dict[str, Any]:
         "opencv_available": _module_available("cv2"),
         "pytesseract_available": _module_available("pytesseract"),
         "trocr": OptionalTrOcrFieldRecognizer().diagnostic(),
+        "native_vision_available": NativeVisionBackend().configured,
         "external_fallback": "disabled",
         "network_required_at_runtime": False,
         "debug_enabled": OCR_DEBUG,

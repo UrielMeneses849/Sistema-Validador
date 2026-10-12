@@ -1,72 +1,51 @@
 <!doctype html>
-<html lang="es-MX">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="Auditoría del historial de mantenimiento vehicular">
-  <title>Auditoría de historial · InteliDrive</title>
-  <link rel="stylesheet" href="/css/styles.css">
-</head>
-<body>
-<div class="app-shell audit-shell">
-  <aside class="sidebar">
-    <a class="brand agency-brand" href="/" aria-label="InteliDrive, inicio"><span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 32 32"><path d="M6 20.5c2.8-6.1 6.1-9.3 10-9.7 4.2-.4 7.5 2.3 10 8.2M9 20h14M11 24h10"/></svg></span><span><strong>InteliDrive</strong><small>Vehicle Intelligence</small></span></a>
-    <p class="nav-label">OPERACIÓN</p>
-    <nav aria-label="Navegación principal"><ul class="nav-list">
-      <li><a class="active" href="/"><span class="nav-icon" aria-hidden="true">⌕</span>Auditoría historial</a></li>
-      <li><a href="/dashboard.html"><span class="nav-icon" aria-hidden="true">▦</span>Dashboard</a></li>
-      <li><a href="/vehicles.html"><span class="nav-icon" aria-hidden="true">▤</span>Vehículos</a></li>
-      <li><a href="/manufacturer_rules.html"><span class="nav-icon" aria-hidden="true">⚙</span>Reglas de fabricantes</a></li>
-      <li><a href="/register_maintenance.html"><span class="nav-icon" aria-hidden="true">◷</span>Últimos mantenimientos</a></li>
-      <li><a href="/validate_document.html"><span class="nav-icon" aria-hidden="true">⌁</span>Validar documento</a></li>
-      <li><a href="/history.html"><span class="nav-icon" aria-hidden="true">☷</span>Historial</a></li>
-    </ul></nav>
-    <div class="side-footer"><span>Powered by</span><strong>NEXVORA</strong></div>
-  </aside>
-
-  <main class="page audit-page" id="new-analysis">
-    <div class="topbar"><div><strong>Panel operativo</strong><small>Bienvenido a InteliDrive</small></div><span class="system-status"><i></i>Datos y decisiones en movimiento</span></div>
-    <header class="audit-header">
-      <div class="audit-hero-copy"><p class="eyebrow">Auditoría inteligente</p><h1>Verifica el historial<br>sin descifrar <em>cada sello.</em></h1><p class="subtitle">Analiza la cronología de mantenimiento, kilometraje y consistencia documental de cada vehículo desde un solo lugar.</p></div>
-      <div class="hero-benefits" aria-hidden="true"><span><b>Más control</b><small>Decisiones basadas en datos</small></span><span><b>Más confianza</b><small>Historiales verificables</small></span><span><b>Más eficiencia</b><small>Todo en un solo sistema</small></span></div>
-      <div class="automotive-visual" aria-hidden="true"><span>VEHÍCULOS<br>EN MEJORES<br>MANOS</span></div>
-    </header>
-    <div class="audit-flow" aria-label="Proceso de auditoría"><div class="active"><b>01</b><span><strong>Seleccionar vehículo</strong><small>Elige un vehículo de tu flota</small></span></div><i></i><div><b>02</b><span><strong>Analizar historial</strong><small>Procesamos la información</small></span></div><i></i><div><b>03</b><span><strong>Obtener dictamen</strong><small>Conoce el resultado</small></span></div></div>
-
-    <div class="audit-workspace">
-      <aside class="audit-controls" aria-label="Carga y reglas del análisis">
-        <div class="field audit-vehicle-field"><p class="card-kicker">Vehículo</p><h2>Selecciona el vehículo que quieres auditar.</h2><label for="audit-vehicle">Vehículo <span class="required">*</span></label><select id="audit-vehicle" required><option value="">Cargando vehículos…</option></select><small>Todos los documentos deben pertenecer al mismo vehículo.</small></div>
-        <div id="audit-dropzone" class="audit-dropzone">
-          <input id="audit-files" class="visually-hidden" type="file" accept="application/pdf,image/jpeg,image/png,image/webp" multiple aria-describedby="audit-upload-help audit-upload-error">
-          <button id="audit-file-trigger" class="audit-upload-trigger" type="button">
-            <span class="audit-upload-icon" aria-hidden="true">⇧</span>
-            <strong>Arrastra o selecciona documentos</strong>
-            <span id="audit-upload-help">PDF, JPG, PNG o WEBP · máximo 15 · 10 MB c/u</span>
-          </button>
-        </div>
-        <p id="audit-upload-error" class="audit-field-error" role="alert"></p>
-        <div id="audit-previews" class="audit-previews-panel hidden" aria-label="Imágenes seleccionadas"></div>
-        <p id="audit-demo-note" class="audit-demo-note hidden">Los documentos se procesan localmente y no se envían a servicios externos.</p>
-        <div id="audit-process-status" class="audit-process-status hidden" role="status"><div><strong id="audit-progress-label">Preparando análisis…</strong><button id="audit-cancel" type="button">Cancelar</button></div><progress id="audit-progress" max="1" value="0"></progress><small id="audit-current-file"></small></div>
-        <div id="audit-partial-error" class="notice error" role="alert"></div>
-        <div class="audit-upload-actions"><button id="audit-analyze" class="button button-primary" type="button" disabled>✦ Analizar documentos</button><button id="audit-retry" class="button button-secondary hidden" type="button">↻ Reintentar fallidos</button><button id="audit-example" class="button button-secondary audit-example" type="button"><span aria-hidden="true">▧</span><span>Ver análisis de ejemplo</span></button></div>
-      </aside>
-
-      <section id="audit-result" class="audit-result" aria-live="polite">
-        <div class="audit-empty">
-          <span class="audit-empty-icon" aria-hidden="true">✓</span>
-          <p class="card-kicker">Dictamen</p>
-          <h2>Esperando análisis</h2>
-          <p>Selecciona un vehículo y carga sus documentos para comenzar la auditoría de su historial.</p>
-        </div>
-      </section>
-    </div>
-    <section class="criteria-section" aria-labelledby="criteria-title"><header><span aria-hidden="true">⚙</span><div><h2 id="criteria-title">Criterios de validación</h2><p>Reglas utilizadas para el análisis del historial de mantenimiento</p></div></header><div class="audit-rules"><article class="audit-rule"><span aria-hidden="true">▣</span><div><small>INTERVALO TEMPORAL</small><strong>Intervalo normal + tolerancia</strong><small>6 meses para Seminuevo (M2) o política activa de la marca para Nuevo (M1), más 1 mes de tolerancia.</small></div><b>Regla determinista</b></article><article class="audit-rule"><span aria-hidden="true">◔</span><div><small>KILOMETRAJE</small><strong>Intervalo normal + tolerancia</strong><small>10,000 km para Seminuevo (M2) o política activa de la marca para Nuevo (M1), más 1,000 km de tolerancia.</small></div><b>Regla determinista</b></article></div></section>
-    <div id="audit-new-action" class="audit-new-action hidden"><button id="audit-reset" class="button button-primary" type="button">↻ Comenzar nuevo análisis</button></div>
-  </main>
+<html lang="es-MX"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="description" content="Valida el historial de mantenimiento de tu vehículo con InteliDrive"><title>Validador de mantenimientos imágenes · InteliDrive</title><link rel="stylesheet" href="/css/styles.css?v=intelidrive-dark-3"><link rel="stylesheet" href="/css/intelidrive-dark.css?v=intelidrive-dark-3"></head><body><a class="skip-link" href="#main-content">Ir al contenido</a>
+<div class="app-shell audit-shell"><aside class="sidebar">
+      <a class="brand" href="/?v=intelidrive-dark-3" aria-label="InteliDrive, inicio"><svg class="brand-logo" viewBox="0 0 48 42" aria-hidden="true"><path d="M5 5h22c24 0 23 30-1 30h-7l3-10h6c10 0 11-10 0-10H3z"/><path d="M5 21h10l-4 16H1z"/></svg><span><strong>InteliDrive</strong><small>Vehicle Intelligence</small></span></a>
+      <p class="nav-label">VALIDAR MANTENIMIENTOS</p>
+      <nav aria-label="Navegación principal"><ul class="nav-list"><li><a href="/validate_document.html?v=intelidrive-dark-3"><svg class="ui-icon nav-icon" aria-hidden="true"><use href="/css/assets/icons.svg?v=intelidrive-dark-3#pdf"></use></svg><span>Validador de mantenimientos PDF</span></a></li><li><a class="active" aria-current="page" href="/validate_images.html?v=intelidrive-dark-3"><svg class="ui-icon nav-icon" aria-hidden="true"><use href="/css/assets/icons.svg?v=intelidrive-dark-3#image"></use></svg><span>Validador de mantenimientos imágenes</span></a></li><li><a href="/vehicles.html?v=intelidrive-dark-3"><svg class="ui-icon nav-icon" aria-hidden="true"><use href="/css/assets/icons.svg?v=intelidrive-dark-3#vehicle"></use></svg><span>Vehículos</span></a></li><li><a href="/manufacturer_rules.html?v=intelidrive-dark-3"><svg class="ui-icon nav-icon" aria-hidden="true"><use href="/css/assets/icons.svg?v=intelidrive-dark-3#rules"></use></svg><span>Reglas de fabricante</span></a></li><li><a href="/history.html?v=intelidrive-dark-3"><svg class="ui-icon nav-icon" aria-hidden="true"><use href="/css/assets/icons.svg?v=intelidrive-dark-3#history"></use></svg><span>Historial</span></a></li></ul></nav>
+      <a class="sidebar-guide" href="/vehicles.html?v=intelidrive-dark-3"><svg class="ui-icon " aria-hidden="true"><use href="/css/assets/icons.svg?v=intelidrive-dark-3#sparkle"></use></svg><span><strong>¿Por dónde empiezo?</strong><small>Registra tu vehículo y después valida sus comprobantes.</small></span><svg class="ui-icon " aria-hidden="true"><use href="/css/assets/icons.svg?v=intelidrive-dark-3#arrow"></use></svg></a>
+      <div class="side-footer"><span>Powered by</span><strong>NEXVORA</strong><i></i><small>DRIVEN BY DATA<br>BUILT FOR WHAT’S NEXT</small></div>
+    </aside>
+<main class="page audit-page" id="main-content"><div id="new-analysis"><div class="topbar"><div><strong>Panel de mantenimiento</strong><small>Validador de mantenimientos imágenes</small></div><span class="system-status"><i></i>Inteligencia en cada kilómetro</span></div><header class="audit-header">
+      <div class="audit-hero-copy"><p class="eyebrow">Validador de mantenimientos imágenes</p><h1>Cada kilómetro<br>cuenta una <em>historia.</em></h1><p class="subtitle">Convierte fotos de tus comprobantes en un historial claro. Revisamos las fechas, el kilometraje y los intervalos de mantenimiento.</p>
+      <div class="hero-benefits"><span><svg class="ui-icon " aria-hidden="true"><use href="/css/assets/icons.svg?v=intelidrive-dark-3#shield"></use></svg><span><b>Más control</b><small>Decisiones basadas en datos</small></span></span><span><svg class="ui-icon " aria-hidden="true"><use href="/css/assets/icons.svg?v=intelidrive-dark-3#bars"></use></svg><span><b>Más confianza</b><small>Historiales verificables</small></span></span><span><svg class="ui-icon " aria-hidden="true"><use href="/css/assets/icons.svg?v=intelidrive-dark-3#rules"></use></svg><span><b>Más eficiencia</b><small>Todo en un solo sistema</small></span></span></div></div>
+      <div class="automotive-visual" aria-hidden="true"><span>VEHÍCULOS<br>MÁS SEGUROS<br>OPERACIONES<br>MÁS INTELIGENTES</span></div>
+    </header><div class="audit-flow" aria-label="Tres pasos para validar"><div class="active"><b>01</b><span><strong>Selecciona el vehículo</strong><small>Elige a quién pertenecen los archivos</small></span></div><i></i><div><b>02</b><span><strong>Carga tus imágenes</strong><small>Analizamos sus mantenimientos</small></span></div><i></i><div><b>03</b><span><strong>Revisa el resultado</strong><small>Confirma fechas y kilometraje</small></span></div></div>
+<div class="audit-workspace">
+  <section id="validator-upload-panel" class="audit-controls" aria-label="Seleccionar vehículo y cargar imágenes">
+    <header class="control-heading"><svg class="ui-icon " aria-hidden="true"><use href="/css/assets/icons.svg?v=intelidrive-dark-3#vehicle"></use></svg><div><h2>Tu vehículo</h2><p>Primero elige el vehículo que quieres validar.</p></div></header>
+    <div class="field audit-vehicle-field"><label for="audit-vehicle">Vehículo <span class="required">*</span></label><select id="audit-vehicle" required><option value="">Cargando vehículos…</option></select><small>¿Aún no está registrado? <a href="/vehicles.html?v=intelidrive-dark-3">Agregar vehículo <svg class="ui-icon " aria-hidden="true"><use href="/css/assets/icons.svg?v=intelidrive-dark-3#arrow"></use></svg></a></small></div>
+    <div id="audit-dropzone" class="audit-dropzone"><input id="audit-files" class="visually-hidden" type="file" accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp" multiple aria-describedby="audit-upload-help audit-upload-error"><button id="audit-file-trigger" class="audit-upload-trigger" type="button"><span class="audit-upload-icon"><svg class="ui-icon " aria-hidden="true"><use href="/css/assets/icons.svg?v=intelidrive-dark-3#upload"></use></svg></span><span class="upload-copy"><strong>Arrastra o selecciona imágenes</strong><small id="audit-upload-help">JPG, PNG o WEBP · hasta 15 archivos · 10 MB c/u</small></span></button></div>
+    <p id="audit-upload-error" class="audit-field-error" role="alert"></p>
+    <div id="audit-previews" class="audit-previews-panel hidden" aria-label="Imágenes seleccionadas"></div>
+    <p id="audit-demo-note" class="audit-demo-note hidden">Usa fotos nítidas, con la fecha y el kilometraje completos.</p>
+    <div id="audit-process-status" class="audit-process-status hidden" role="status"><div><strong id="audit-progress-label">Preparando análisis…</strong><button id="audit-cancel" type="button">Cancelar</button></div><progress id="audit-progress" max="1" value="0"></progress><small id="audit-current-file"></small></div>
+    <div class="audit-upload-actions"><button id="audit-analyze" class="button button-primary" type="button" disabled><svg class="ui-icon " aria-hidden="true"><use href="/css/assets/icons.svg?v=intelidrive-dark-3#sparkle"></use></svg>Analizar imágenes</button><button id="audit-retry" class="button button-secondary hidden" type="button">Reintentar archivos fallidos</button><button id="audit-example" class="button button-secondary" type="button"><svg class="ui-icon " aria-hidden="true"><use href="/css/assets/icons.svg?v=intelidrive-dark-3#image"></use></svg>Ver un ejemplo</button></div>
+    <p class="storage-note"><svg class="ui-icon " aria-hidden="true"><use href="/css/assets/icons.svg?v=intelidrive-dark-3#history"></use></svg><span>Los análisis se guardan en <a href="/history.html?v=intelidrive-dark-3">Historial</a> para consultarlos después.</span></p>
+    <a class="format-switch" href="/validate_document.html?v=intelidrive-dark-3">¿Tus comprobantes son PDF? <strong>Validar PDF <svg class="ui-icon " aria-hidden="true"><use href="/css/assets/icons.svg?v=intelidrive-dark-3#arrow"></use></svg></strong></a>
+  </section>
+  <section class="audit-result" aria-label="Resultado de las imágenes"><header class="result-panel-header"><svg class="ui-icon " aria-hidden="true"><use href="/css/assets/icons.svg?v=intelidrive-dark-3#file-search"></use></svg><div><h2>Resultado del análisis</h2><p>El historial de tu vehículo, explicado con claridad.</p></div><button id="validator-expand-table" class="button button-secondary validator-expand-button" type="button" aria-controls="validator-upload-panel" aria-expanded="false">Ampliar tabla</button></header><div id="audit-partial-error" class="notice error" role="alert"></div><div id="audit-result" aria-live="polite"><div class="audit-empty"><span class="empty-orbit"><svg class="ui-icon " aria-hidden="true"><use href="/css/assets/icons.svg?v=intelidrive-dark-3#file-search"></use></svg></span><h2>Esperando análisis</h2><p>Selecciona un vehículo y carga sus imágenes. Aquí verás el resultado de la validación.</p><div class="empty-tip"><svg class="ui-icon " aria-hidden="true"><use href="/css/assets/icons.svg?v=intelidrive-dark-3#shield"></use></svg><span>Comprobamos la secuencia de fechas, el kilometraje y el cumplimiento de los intervalos.</span></div></div></div></section>
 </div>
-<script src="/js/api.js"></script>
-<script src="/js/maintenance-analysis-api.js"></script>
-<script src="/js/audit.js"></script>
-</body>
-</html>
+<details class="criteria-section"><summary><svg class="ui-icon " aria-hidden="true"><use href="/css/assets/icons.svg?v=intelidrive-dark-3#rules"></use></svg><span>¿Qué revisamos en tus mantenimientos?</span><span class="details-chevron">⌄</span></summary><div class="audit-rules"><article class="audit-rule"><h3>Fechas y kilometraje</h3><p>Comprobamos que avancen en orden y que los documentos correspondan al mismo vehículo.</p></article><article class="audit-rule"><h3>Intervalos de mantenimiento</h3><p>Seminuevos: 10,000 km o 6 meses, lo que ocurra primero, más tolerancia. Nuevos: la regla activa del fabricante.</p><a href="/manufacturer_rules.html?v=intelidrive-dark-3">Consultar reglas <svg class="ui-icon " aria-hidden="true"><use href="/css/assets/icons.svg?v=intelidrive-dark-3#arrow"></use></svg></a></article></div></details>
+<div id="audit-new-action" class="audit-new-action hidden"><button id="audit-reset" class="button button-primary" type="button">Comenzar otro análisis <svg class="ui-icon " aria-hidden="true"><use href="/css/assets/icons.svg?v=intelidrive-dark-3#arrow"></use></svg></button></div>
+</div></main></div>
+<dialog id="audit-review-dialog" class="audit-review-dialog" aria-labelledby="audit-review-title">
+  <header class="audit-review-header"><div><h2 id="audit-review-title">Revisar foto de mantenimiento</h2><p id="audit-review-filename"></p></div><button id="audit-review-close" class="button button-secondary" type="button" aria-label="Cerrar revisión de foto">Cerrar</button></header>
+  <div class="audit-review-layout">
+    <section class="audit-photo-panel" aria-label="Foto original">
+      <div class="audit-photo-toolbar"><span id="audit-review-format">Foto completa</span><div><button class="button button-secondary" data-zoom="-0.5" type="button" aria-label="Reducir foto">−</button><output id="audit-review-zoom" aria-live="polite">100%</output><button class="button button-secondary" data-zoom="0.5" type="button" aria-label="Ampliar foto">＋</button><a id="audit-review-original" class="button button-secondary" target="_blank" rel="noopener noreferrer">Abrir original ↗</a></div></div>
+      <div class="audit-photo-viewer" tabindex="0" aria-label="Foto con zoom; desplázate para revisar sus detalles"><img id="audit-review-image" alt="Comprobante de mantenimiento"><iframe id="audit-review-pdf" title="Documento PDF original" hidden></iframe></div>
+    </section>
+    <form id="audit-review-form" class="audit-review-form">
+      <h3>Corregir lectura</h3><p>Comprueba estos datos en la foto y guárdalos juntos.</p>
+      <p id="audit-review-demo" class="audit-review-demo" hidden>Ejemplo ficticio. Los cambios de esta demostración no se guardan en el historial.</p>
+      <div class="field"><label for="audit-review-date">Fecha del mantenimiento <span class="required">*</span></label><input id="audit-review-date" type="date" required></div>
+      <div class="field"><label for="audit-review-mileage">Kilometraje <span class="required">*</span></label><input id="audit-review-mileage" type="number" min="0" step="1" required inputmode="numeric"></div>
+      <p id="audit-review-notice" class="audit-field-error" role="alert"></p>
+      <button class="button button-primary" type="submit">Guardar y recalcular</button>
+      <small>La corrección se marca como revisión manual y se vuelven a comprobar los intervalos.</small>
+    </form>
+  </div>
+</dialog>
+<template id="image-empty-template"><div class="audit-empty"><span class="empty-orbit"><svg class="ui-icon " aria-hidden="true"><use href="/css/assets/icons.svg?v=intelidrive-dark-3#file-search"></use></svg></span><h2>Esperando análisis</h2><p>Selecciona un vehículo y carga sus imágenes. Aquí verás el resultado de la validación.</p><div class="empty-tip"><svg class="ui-icon " aria-hidden="true"><use href="/css/assets/icons.svg?v=intelidrive-dark-3#shield"></use></svg><span>Comprobamos la secuencia de fechas, el kilometraje y el cumplimiento de los intervalos.</span></div></div></template><script src="/js/api.js?v=intelidrive-dark-3"></script><script src="/js/maintenance-analysis-api.js?v=intelidrive-dark-3"></script><script src="/js/audit.js?v=intelidrive-dark-3"></script></body></html>

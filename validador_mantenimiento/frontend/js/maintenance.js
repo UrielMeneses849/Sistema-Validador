@@ -18,4 +18,8 @@ maintenanceForm.addEventListener("submit", async (event) => {
   try { await API.post(`/vehicles/${vehicleId}/maintenances`, data); maintenanceForm.reset(); maintenanceSelect.value = vehicleId; UI.notice(maintenanceNotice, "Mantenimiento de referencia guardado correctamente.", "success"); await loadMaintenanceHistory() } catch (error) { UI.notice(maintenanceNotice, error.message, "error") }
 })
 maintenanceSelect.addEventListener("change", loadMaintenanceHistory)
-UI.vehicleOptions(maintenanceSelect).then(loadMaintenanceHistory).catch((error) => UI.notice(maintenanceNotice, error.message, "error"))
+UI.vehicleOptions(maintenanceSelect).then(() => {
+  const vehicleId = new URLSearchParams(window.location.search).get("vehicle_id")
+  if (vehicleId && Array.from(maintenanceSelect.options).some((option) => option.value === vehicleId)) maintenanceSelect.value = vehicleId
+  return loadMaintenanceHistory()
+}).catch((error) => UI.notice(maintenanceNotice, error.message, "error"))

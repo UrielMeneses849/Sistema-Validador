@@ -13,6 +13,7 @@ from app.core.config import OCR_MAX_IMAGE_PIXELS
 SUPPORTED_IMAGE_FORMATS = {"JPEG": ".jpg", "PNG": ".png", "WEBP": ".webp"}
 MAX_IMAGE_SIDE = 12_000
 MIN_OCR_LONG_EDGE = 1_800
+MAX_OCR_LONG_EDGE = 2_800
 MAX_UPSCALE_FACTOR = 2.0
 
 
@@ -155,11 +156,18 @@ def _opencv_geometry(image: Image.Image) -> tuple[Image.Image, float, bool, list
 
     corrected_gray = cv2.cvtColor(corrected, cv2.COLOR_RGB2GRAY)
     inverted = cv2.threshold(corrected_gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)[1]
-    coordinates = np.column_stack(np.where(inverted > 0))
     deskew_degrees = 0.0
-    if len(coordinates) > 100:
-        angle = float(cv2.minAreaRect(coordinates[:, ::-1].astype("float32"))[-1])
-        angle = -(90 + angle) if angle < -45 else -angle
+    lines = cv2.HoughLinesP(inverted, 1, np.pi / 180, 80,
+                            minLineLength=max(80, corrected.shape[1] // 8), maxLineGap=12)
+    angles = []
+    if lines is not None:
+        for x0, y0, x1, y1 in lines[:, 0]:
+            angle = float(np.degrees(np.arctan2(y1 - y0, x1 - x0)))
+            if abs(angle) <= 10:
+                angles.append(angle)
+    # El borde del asiento o un sello no representa la inclinación del texto.
+    if len(angles) >= 5:
+        angle = float(np.median(angles))
         if 0.15 <= abs(angle) <= 12:
             height, width = corrected.shape[:2]
             rotation = cv2.getRotationMatrix2D((width / 2, height / 2), angle, 1.0)
@@ -211,6 +219,7 @@ def prepare_image_variants(
     output = Path(output_directory)
     output.mkdir(parents=True, exist_ok=True)
     image = load_oriented_rgb(original_path)
+    image.thumbnail((MAX_OCR_LONG_EDGE, MAX_OCR_LONG_EDGE), Image.Resampling.LANCZOS)
     diagnostics: list[str] = ["Orientación EXIF aplicada."]
     rotation = 0
     if orientation_detector is not None:
@@ -244,7 +253,7 @@ def prepare_image_variants(
     paths: dict[str, Path] = {}
     for name, variant in all_images.items():
         destination = output / f"{name}.png"
-        variant.save(destination, format="PNG", optimize=True)
+        variant.save(destination, format="PNG", compress_level=1)
         paths[name] = destination
     return ImageVariantSet(
         original_path=original_path,
@@ -269,3 +278,34 @@ def preprocess_image(source_path: str | Path, destination_path: str | Path) -> P
     destination = Path(destination_path)
     prepared.save(destination, format="PNG", optimize=True)
     return destination
+
+
+def field_reading_variants(image: Image.Image) -> dict[str, Image.Image]:
+    """Variantes complementarias; ninguna sustituye la evidencia original."""
+    from PIL import ImageOps
+    original = ImageOps.expand(image, border=12, fill="white")
+    scale = min(3.0, 1800 / max(image.width, 1))
+    image = image.resize((int(image.width * scale), int(image.height * scale)), Image.Resampling.LANCZOS)
+    result = {"native_scale": original, "field_original": ImageOps.expand(image, border=12, fill="white")}
+    try:
+        import cv2
+        import numpy as np
+    except ImportError:
+        return result
+    rgb = np.asarray(image).astype(np.int16)
+    blue = rgb[:, :, 2] - np.maximum(rgb[:, :, 0], rgb[:, :, 1])
+    # Sólo se usa si hay tinta azul; evita amplificar ruido de papel gris.
+    if np.count_nonzero(blue > 14) > image.width * image.height * .004:
+        mask = np.clip(255 - np.maximum(blue - 7, 0) * 12, 0, 255).astype(np.uint8)
+        result["blue_ink"] = ImageOps.expand(Image.fromarray(mask).convert("RGB"), border=12, fill="white")
+    gray = cv2.cvtColor(rgb.astype(np.uint8), cv2.COLOR_RGB2GRAY)
+    binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)[1]
+    lines = cv2.HoughLinesP(binary, 1, np.pi/180, max(20, image.width//4),
+                            minLineLength=max(30, image.width//2), maxLineGap=12)
+    if lines is not None:
+        cleaned = gray.copy()
+        for x0, y0, x1, y1 in lines[:, 0]:
+            if abs(y1-y0) <= max(3, abs(x1-x0)*.12):
+                cv2.line(cleaned, (x0,y0), (x1,y1), 255, 2)
+        result["field_without_rules"] = ImageOps.expand(Image.fromarray(cleaned).convert("RGB"), border=12, fill="white")
+    return result

@@ -56,6 +56,59 @@ const UI = {
 window.API = API
 window.UI = UI
 
+// Keep the navigation compact across pages without changing the current form.
+const appShell = document.querySelector(".app-shell")
+const sidebar = appShell?.querySelector(".sidebar")
+if (sidebar) {
+  const compactScreen = window.matchMedia("(max-width: 800px)")
+  const navigation = sidebar.querySelector("nav")
+  const menuButton = document.createElement("button")
+  menuButton.type = "button"
+  menuButton.className = "sidebar-toggle"
+  menuButton.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m14 6-6 6 6 6"/></svg><span></span>'
+  navigation.id = "sidebar-navigation"
+  menuButton.setAttribute("aria-controls", navigation.id)
+  sidebar.prepend(menuButton)
+  sidebar.querySelectorAll(".nav-list a").forEach((link) => {
+    link.title = link.textContent.trim()
+  })
+
+  const preferenceKey = () => `intelidrive-menu-${compactScreen.matches ? "mobile" : "desktop"}`
+  const setMenuCollapsed = (collapsed) => {
+    appShell.classList.toggle("sidebar-collapsed", collapsed)
+    const label = collapsed ? "Mostrar menú" : compactScreen.matches ? "Ocultar menú" : "Contraer menú"
+    menuButton.setAttribute("aria-expanded", String(!collapsed))
+    menuButton.setAttribute("aria-label", label)
+    menuButton.title = label
+    menuButton.querySelector("span").textContent = label
+  }
+  const restoreMenu = () => {
+    let saved = null
+    try { saved = localStorage.getItem(preferenceKey()) } catch { /* Storage may be unavailable. */ }
+    setMenuCollapsed(saved === null ? compactScreen.matches : saved === "collapsed")
+  }
+  menuButton.addEventListener("click", () => {
+    const collapsed = !appShell.classList.contains("sidebar-collapsed")
+    setMenuCollapsed(collapsed)
+    try { localStorage.setItem(preferenceKey(), collapsed ? "collapsed" : "expanded") } catch { /* Navigation still works without storage. */ }
+  })
+  compactScreen.addEventListener("change", restoreMenu)
+  restoreMenu()
+}
+
+// Only change layout: hidden upload controls retain their files and selected vehicle.
+const workspace = document.querySelector(".audit-workspace")
+const uploadPanel = document.querySelector("#validator-upload-panel")
+const expandButton = document.querySelector("#validator-expand-table")
+if (workspace && uploadPanel && expandButton) {
+  expandButton.addEventListener("click", () => {
+    const expanded = workspace.classList.toggle("is-expanded")
+    uploadPanel.hidden = expanded
+    expandButton.setAttribute("aria-expanded", String(expanded))
+    expandButton.textContent = expanded ? "Mostrar carga de archivos" : "Ampliar tabla"
+  })
+}
+
 // Capa visual compartida: no modifica datos, rutas ni contratos funcionales.
 const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches
 
@@ -90,11 +143,13 @@ function animateNumber(element) {
 function updateAuditFlow() {
   const steps = document.querySelectorAll(".audit-flow > div")
   if (steps.length !== 3) return
-  const processing = !document.querySelector("#audit-process-status")?.classList.contains("hidden")
-  const hasResult = Boolean(document.querySelector("#audit-result .audit-history"))
+  const processStatus = document.querySelector("#audit-process-status, #history-progress")
+  const processing = Boolean(processStatus && !processStatus.classList.contains("hidden"))
+  const hasResult = Boolean(document.querySelector("#audit-result .audit-history, #history-result:not(.hidden)"))
+  const hasVehicle = Boolean(document.querySelector("#audit-vehicle, #validation-vehicle")?.value)
   steps.forEach((step) => step.classList.remove("active", "complete"))
-  steps[0].classList.add(hasResult || processing ? "complete" : "active")
-  if (processing) steps[1].classList.add("active")
+  steps[0].classList.add(hasResult || processing || hasVehicle ? "complete" : "active")
+  if (processing || (hasVehicle && !hasResult)) steps[1].classList.add("active")
   if (hasResult) {
     steps[1].classList.add("complete")
     steps[2].classList.add("active")
@@ -114,6 +169,9 @@ const visualObserver = new MutationObserver((mutations) => {
   updateAuditFlow()
 })
 visualObserver.observe(document.body, { childList: true, subtree: true })
-const auditStatus = document.querySelector("#audit-process-status")
+const auditStatus = document.querySelector("#audit-process-status, #history-progress")
 if (auditStatus) new MutationObserver(updateAuditFlow).observe(auditStatus, { attributes: true, attributeFilter: ["class"] })
+const pdfResult = document.querySelector("#history-result")
+if (pdfResult) new MutationObserver(updateAuditFlow).observe(pdfResult, { attributes: true, attributeFilter: ["class"] })
+document.querySelector("#audit-vehicle, #validation-vehicle")?.addEventListener("change", updateAuditFlow)
 updateAuditFlow()

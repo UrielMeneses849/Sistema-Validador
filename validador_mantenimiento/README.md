@@ -153,6 +153,47 @@ El reporte incluye cuadros detectados, eventos esperados/detectados, exactitud e
 
 ## TrOCR preentrenado opcional
 
+### OCR de libretas fotografiadas en macOS
+
+El lector verifica las cuatro orientaciones mediante etiquetas impresas y reconstruye
+retículas de tres columnas para libretas GM/Hyundai cuando hay evidencia geométrica
+suficiente. Recorta fecha y kilometraje por separado, conserva el cuadro original
+como contexto y descarta líneas vacías. No usa el kilometraje programado del encabezado
+como odómetro. Los sellos todavía pueden generar filas pendientes de revisión.
+
+En macOS se puede instalar el adaptador local de Apple Vision, sin API keys ni envío
+de fotografías a servicios externos:
+
+```bash
+.venv/bin/python -m training.build_native_ocr
+```
+
+Requiere `swiftc` (herramientas de desarrollo de Apple). El binario se guarda en
+`models/native/vision-ocr`, ignorado por Git. El servidor lo detecta automáticamente
+en la siguiente lectura; `VISION_OCR_ENABLED=0` lo desactiva y
+`VISION_OCR_EXECUTABLE=/ruta/vision-ocr` permite otra ubicación. En Linux/Windows o
+sin el binario continúa el lector Tesseract/TrOCR configurado. Los contenedores o
+sandboxes que bloqueen Vision pueden impedir su ejecución: el diagnóstico del análisis
+informa el fallo y conserva el OCR alternativo. No se compila durante una petición.
+
+Las probabilidades del motor **no equivalen a exactitud medida**. Las lecturas de
+Vision quedan por debajo del umbral de aprobación automática y requieren confirmación.
+El diagnóstico `/api/documents/ocr-diagnostics` informa si el adaptador está instalado.
+
+Para medir sólo fotografías autorizadas, sin modificar sus originales ni la base de datos:
+
+```bash
+.venv/bin/python -m training.benchmark_attached_photos /ruta/a/fotos \
+  --files foto1.jpg foto2.jpg --output debug_ocr/comparacion
+```
+
+El reporte incluye valores elegidos, alternativas, recortes, proveedores y tiempos.
+La exactitud debe contrastarse con valores verificados por cuadro; el número de filas
+detectadas no mide exactitud. Para guardar etiquetas y métricas exactas se mantienen
+los comandos `label_real_fixture` y `evaluate_real_benchmark` descritos arriba.
+Cuando no se lee una foto, la interfaz ofrece **Ver foto y agregar mantenimiento**;
+la captura se guarda vinculada al documento original.
+
 Torch/Transformers no forman parte del entorno principal. La configuración reproducible usa Python 3.12 en otro venv y descarga el checkpoint público una sola vez:
 
 ```bash
