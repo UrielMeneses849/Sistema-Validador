@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="es-MX">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Reglas de fabricante · InteliDrive</title>
+  <link rel="stylesheet" href="/css/styles.css?v=intelidrive-dark-3"><link rel="stylesheet" href="/css/intelidrive-dark.css?v=intelidrive-dark-3">
+</head>
+<body><a class="skip-link" href="#main-content">Ir al contenido</a>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <a class="brand" href="/?v=intelidrive-dark-3" aria-label="InteliDrive, inicio"><svg class="brand-logo" viewBox="0 0 48 42" aria-hidden="true"><path d="M5 5h22c24 0 23 30-1 30h-7l3-10h6c10 0 11-10 0-10H3z"/><path d="M5 21h10l-4 16H1z"/></svg><span><strong>InteliDrive</strong><small>Vehicle Intelligence</small></span></a>
+      <p class="nav-label">VALIDAR MANTENIMIENTOS</p>
+      <nav aria-label="Navegación principal"><ul class="nav-list"><li><a href="/validate_document.html?v=intelidrive-dark-3"><svg class="ui-icon nav-icon" aria-hidden="true"><use href="/css/assets/icons.svg?v=intelidrive-dark-3#pdf"></use></svg><span>Validador de mantenimientos PDF</span></a></li><li><a href="/validate_images.html?v=intelidrive-dark-3"><svg class="ui-icon nav-icon" aria-hidden="true"><use href="/css/assets/icons.svg?v=intelidrive-dark-3#image"></use></svg><span>Validador de mantenimientos imágenes</span></a></li><li><a href="/vehicles.html?v=intelidrive-dark-3"><svg class="ui-icon nav-icon" aria-hidden="true"><use href="/css/assets/icons.svg?v=intelidrive-dark-3#vehicle"></use></svg><span>Vehículos</span></a></li><li><a class="active" aria-current="page" href="/manufacturer_rules.html?v=intelidrive-dark-3"><svg class="ui-icon nav-icon" aria-hidden="true"><use href="/css/assets/icons.svg?v=intelidrive-dark-3#rules"></use></svg><span>Reglas de fabricante</span></a></li><li><a href="/history.html?v=intelidrive-dark-3"><svg class="ui-icon nav-icon" aria-hidden="true"><use href="/css/assets/icons.svg?v=intelidrive-dark-3#history"></use></svg><span>Historial</span></a></li></ul></nav>
+      <a class="sidebar-guide" href="/vehicles.html?v=intelidrive-dark-3"><svg class="ui-icon " aria-hidden="true"><use href="/css/assets/icons.svg?v=intelidrive-dark-3#sparkle"></use></svg><span><strong>¿Por dónde empiezo?</strong><small>Registra tu vehículo y después valida sus comprobantes.</small></span><svg class="ui-icon " aria-hidden="true"><use href="/css/assets/icons.svg?v=intelidrive-dark-3#arrow"></use></svg></a>
+      <div class="side-footer"><span>Powered by</span><strong>NEXVORA</strong><i></i><small>DRIVEN BY DATA<br>BUILT FOR WHAT’S NEXT</small></div>
+    </aside>
+
+    <main class="page" id="main-content"><div class="topbar"><div><strong>Panel de mantenimiento</strong><small>Reglas de fabricante</small></div><span class="system-status"><i></i>Inteligencia en cada kilómetro</span></div>
+      <header class="page-header">
+        <div>
+          <p class="eyebrow">Configuración de mantenimiento</p>
+          <h1>Reglas de fabricante</h1>
+          <p class="subtitle">Define cada cuánto debe recibir mantenimiento un vehículo nuevo, según su marca.</p>
+        </div>
+        <a class="button button-secondary" href="/vehicles.html?v=intelidrive-dark-3">← Volver a vehículos</a>
+      </header>
+
+      <div class="split">
+        <section class="card">
+          <div class="card-header">
+            <div>
+              <h2 class="card-title" id="rule-form-title">Registrar regla</h2>
+              <p class="card-subtitle">Usa los intervalos indicados en el manual del fabricante.</p>
+            </div>
+          </div>
+          <div id="rule-notice" class="notice" role="status" aria-live="polite"></div>
+          <form id="rule-form">
+            <div class="form-grid">
+              <div class="field full">
+                <label for="rule-brand">Marca <span class="required">*</span></label>
+                <input id="rule-brand" name="brand" maxlength="80" required placeholder="Ford">
+              </div>
+              <div class="field">
+                <label for="rule-months">Intervalo en meses <span class="required">*</span></label>
+                <input id="rule-months" name="interval_months" type="number" min="1" step="1" required placeholder="12">
+              </div>
+              <div class="field">
+                <label for="rule-km">Intervalo en kilómetros <span class="required">*</span></label>
+                <input id="rule-km" name="interval_km" type="number" min="1" step="1" required placeholder="10000">
+              </div>
+              <div class="field full checkbox-field">
+                <label><input id="rule-active" name="active" type="checkbox" checked> Regla activa</label>
+              </div>
+            </div>
+            <div class="form-actions">
+              <button class="button button-primary" id="rule-submit" type="submit">Guardar regla</button>
+              <button class="button button-secondary hidden" id="rule-cancel" type="button">Cancelar edición</button>
+            </div>
+          </form>
+        </section>
+
+        <section class="card">
+          <div class="card-header">
+            <div>
+              <h2 class="card-title">Reglas registradas</h2>
+              <p class="card-subtitle">Una regla inactiva se conserva para trazabilidad, pero no se aplica a nuevas validaciones.</p>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table class="data-table">
+              <thead><tr><th>Marca</th><th>Meses</th><th>Kilómetros</th><th>Estado</th><th>Acciones</th></tr></thead>
+              <tbody id="rules-table"><tr><td colspan="5" class="loading">Cargando reglas…</td></tr></tbody>
+            </table>
+          </div>
+        </section>
+      </div>
+    </main>
+  </div>
+  <script src="/js/api.js?v=intelidrive-dark-3"></script>
+  <script src="/js/manufacturer_rules.js?v=intelidrive-dark-3"></script>
+</body>
+</html>

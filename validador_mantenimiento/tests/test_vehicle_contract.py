@@ -26,8 +26,8 @@ def test_contract_vehicle_is_persisted_and_available_to_the_validator(client: Te
     assert vehicle["brand"] == "Toyota"
     assert vehicle["model"] == "Sienna"
     assert vehicle["kilometraje"] == 12_345
-    assert vehicle["plate"] is None
-    assert vehicle["year"] is None
+    assert vehicle["plate"] == "CONTRATO-835414"
+    assert vehicle["year"] == 2026
 
     # Esta es la misma consulta que usa UI.vehicleOptions en Validar documento.
     selectable = client.get("/api/vehicles?status=active")

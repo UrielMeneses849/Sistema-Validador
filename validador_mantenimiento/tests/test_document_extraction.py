@@ -18,6 +18,12 @@ def create_vehicle(client: TestClient, number: str = "VEH-AUTO-01") -> int:
             "model": "Captiva",
             "year": 2024,
             "current_odometer": 0,
+            "kilometraje": 0,
+            "fecha_factura_origen": "2024-01-01",
+            "fecha_inicio_contrato": "2024-01-01",
+            "fecha_fin_contrato": "2027-01-01",
+            "vehicle_condition": "used",
+            "initial_odometer": 0,
         },
     )
     assert response.status_code == 201, response.text
@@ -57,7 +63,7 @@ def test_individual_service_uses_labeled_odometer_not_commercial_interval(tmp_pa
     assert event.resets_maintenance_interval is True
 
 
-def test_document_api_analyzes_then_marks_first_maintenance_available(client: TestClient, tmp_path):
+def test_document_api_analyzes_then_validates_first_maintenance(client: TestClient, tmp_path):
     vehicle_id = create_vehicle(client)
     pdf = text_pdf(tmp_path / "servicio.pdf", REFERENCE_TEXT)
     uploaded = client.post(
@@ -76,8 +82,21 @@ def test_document_api_analyzes_then_marks_first_maintenance_available(client: Te
 
     validation = client.post(f"/api/service-events/{payload['service_events'][0]['id']}/validate")
     assert validation.status_code == 200, validation.text
-    assert validation.json()["status"] == "FIRST_MAINTENANCE_AVAILABLE"
-    assert validation.json()["analysis_details"]["interval_validation"] == "not_applicable"
+    assert validation.json()["status"] == "COMPLIANT"
+    details = validation.json()["analysis_details"]
+    assert details["vehicle_condition"] == "used"
+    assert details["service_sequence"] == "first"
+    assert details["baseline"]["source"] == "contract_start"
+    assert details["baseline"]["date"] == "2024-01-01"
+    assert details["baseline"]["mileage_km"] == 0
+    assert details["policy"] == {
+        "source": "used_vehicle_default",
+        "brand": None,
+        "rule_id": None,
+        "months": 6,
+        "kilometers": 10_000,
+    }
+    assert details["interval_validation"] == "compliant"
 
 
 def test_force_reanalysis_replaces_only_unconfirmed_automatic_results(client: TestClient, tmp_path):
@@ -130,4 +149,5 @@ def test_manual_fallback_uses_the_same_first_maintenance_rule(client: TestClient
     assert event.status_code == 201, event.text
     result = client.post(f"/api/service-events/{event.json()['id']}/validate")
     assert result.status_code == 200
-    assert result.json()["status"] == "FIRST_MAINTENANCE_AVAILABLE"
+    assert result.json()["status"] == "COMPLIANT"
+    assert result.json()["analysis_details"]["service_sequence"] == "first"

@@ -2,19 +2,33 @@ from __future__ import annotations
 
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 from sqlalchemy.orm import Session
 
 from app.database.database import get_db
-from app.schemas.vehicle_schema import NextContractRead, VehicleCreate, VehicleRead, VehicleUpdate
+from app.schemas.vehicle_schema import (
+    ContractExtractionRead,
+    NextContractRead,
+    VehicleCreate,
+    VehicleRead,
+    VehicleUpdate,
+)
+from app.services.contract_extraction_service import (
+    IncompleteContractError,
+    InvalidContractDocumentError,
+    extract_contract_pdf,
+)
 from app.services.vehicle_service import (
     ContractDateRangeError,
     ContractNumberImmutableError,
     ContractNumberUnavailableError,
     DuplicateInternalNumberError,
+    InitialOdometerImmutableError,
+    VehicleBusinessDataError,
+    VehicleDeletionError,
     VehicleNotFoundError,
     create_vehicle,
-    deactivate_vehicle,
+    delete_vehicle,
     get_vehicle_or_raise,
     get_next_contract_number,
     list_vehicles,
@@ -57,6 +71,23 @@ def get_next_contract(db: Session = Depends(get_db)) -> NextContractRead:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
 
 
+@router.post("/extract-contract", response_model=ContractExtractionRead)
+async def extract_contract(file: UploadFile = File(...)) -> ContractExtractionRead:
+    """Extrae el alta desde un PDF temporal; no registra documentos ni historial."""
+    content = await file.read()
+    try:
+        result = extract_contract_pdf(
+            content,
+            filename=file.filename or "",
+            content_type=file.content_type,
+        )
+    except InvalidContractDocumentError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except IncompleteContractError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
+    return ContractExtractionRead(**result.__dict__)
+
+
 @router.get("/{vehicle_id}", response_model=VehicleRead)
 def get_one(vehicle_id: int, db: Session = Depends(get_db)) -> VehicleRead:
     try:
@@ -71,16 +102,23 @@ def update(vehicle_id: int, payload: VehicleUpdate, db: Session = Depends(get_db
         return update_vehicle(db, vehicle_id, payload)
     except VehicleNotFoundError as exc:
         raise _not_found(exc) from exc
-    except (ContractNumberImmutableError, ContractDateRangeError) as exc:
+    except (
+        ContractNumberImmutableError,
+        ContractDateRangeError,
+        InitialOdometerImmutableError,
+        VehicleBusinessDataError,
+    ) as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
     except DuplicateInternalNumberError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
 
 
-@router.delete("/{vehicle_id}", response_model=VehicleRead)
-def deactivate(vehicle_id: int, db: Session = Depends(get_db)) -> VehicleRead:
-    """Baja lógica: conserva documentos, mantenimientos y validaciones."""
+@router.delete("/{vehicle_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete(vehicle_id: int, db: Session = Depends(get_db)) -> None:
+    """Elimina el vehículo, su historial relacionado y sus archivos originales."""
     try:
-        return deactivate_vehicle(db, vehicle_id)
+        delete_vehicle(db, vehicle_id)
     except VehicleNotFoundError as exc:
         raise _not_found(exc) from exc
+    except VehicleDeletionError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc

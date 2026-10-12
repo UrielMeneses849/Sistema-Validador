@@ -27,6 +27,8 @@ class Vehicle(Base):
     fecha_factura_origen: Mapped[Optional[date]] = mapped_column(nullable=True)
     fecha_inicio_contrato: Mapped[Optional[date]] = mapped_column(nullable=True)
     fecha_fin_contrato: Mapped[Optional[date]] = mapped_column(nullable=True)
+    vehicle_condition: Mapped[str] = mapped_column(String(20), nullable=False, default="unknown")
+    initial_odometer: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow

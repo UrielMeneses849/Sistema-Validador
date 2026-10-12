@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="1100" viewBox="0 0 900 1100">
+  <rect width="900" height="1100" fill="#e8e5dc"/>
+  <rect x="44" y="36" width="812" height="1028" rx="6" fill="#fffcf3" stroke="#c6c4b9" stroke-width="3"/>
+  <g font-family="Arial, sans-serif" fill="#203d4e">
+    <text x="88" y="104" font-size="32" font-weight="bold">REGISTRO DE MANTENIMIENTOS</text>
+    <text x="88" y="145" font-size="18" fill="#765c29">EJEMPLO FICTICIO · SOLO PARA DEMOSTRACIÓN</text>
+    <path d="M88 176H812" stroke="#80949a" stroke-width="2"/>
+    <g stroke="#99a6a5" fill="none" stroke-width="2">
+      <rect x="88" y="218" width="724" height="206" rx="8"/>
+      <rect x="88" y="468" width="724" height="206" rx="8"/>
+      <rect x="88" y="718" width="724" height="206" rx="8"/>
+    </g>
+    <g font-size="20" fill="#6a7a80">
+      <text x="120" y="256">SERVICIO 01 · FECHA / KILOMETRAJE</text>
+      <text x="120" y="506">SERVICIO 02 · FECHA / KILOMETRAJE</text>
+      <text x="120" y="756">SERVICIO 03 · FECHA / KILOMETRAJE</text>
+    </g>
+    <g font-size="40" font-style="italic" fill="#294986">
+      <text x="120" y="326">24 / 01 / 2023</text><text x="120" y="384">10,750 km</text>
+      <text x="120" y="576">15 / 08 / 2023</text><text x="120" y="634">30,294 km</text>
+      <text x="120" y="826">06 / 01 / 2024</text><text x="120" y="884">40,123 km</text>
+    </g>
+    <text x="88" y="995" font-size="18" fill="#6a7a80">Revisa la fecha y el kilometraje antes de confirmar una lectura.</text>
+  </g>
+</svg>

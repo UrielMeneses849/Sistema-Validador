@@ -19,7 +19,9 @@ def get_dashboard(db: Session = Depends(get_db)) -> dict:
     return {
         "vehicles": db.scalar(select(func.count()).select_from(Vehicle)) or 0,
         "validations": db.scalar(select(func.count()).select_from(Validation)) or 0,
-        "approved": status_counts.get("APROBADO", 0) + status_counts.get("COMPLIANT", 0),
+        "approved": status_counts.get("APROBADO", 0)
+        + status_counts.get("COMPLIANT", 0)
+        + status_counts.get("TOLERANCE_PERIOD", 0),
         "rejected": status_counts.get("RECHAZADO", 0),
         "outside_window": status_counts.get("FUERA_DE_VENTANA", 0)
         + status_counts.get("EXCEEDED_MILEAGE", 0)

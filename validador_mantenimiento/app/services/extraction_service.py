@@ -7,8 +7,24 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Protocol
 
-from app.core.config import OCR_LANG, OCR_PROVIDER, OCR_REVIEW_THRESHOLD, TESSERACT_CMD
+from app.core.config import (
+    HANDWRITING_MODEL_PATH,
+    HANDWRITING_PYTHON,
+    OCR_DEBUG,
+    OCR_DEBUG_DIR,
+    OCR_LANG,
+    OCR_PROVIDER,
+    OCR_REVIEW_THRESHOLD,
+    TESSERACT_CMD,
+)
 from app.services.image_preprocessing import ImageValidationError, preprocess_image
+from app.services.maintenance_image_recognizer import (
+    LocalMaintenanceImageRecognizer,
+    OptionalTrOcrFieldRecognizer,
+    RecognitionPipeline,
+    RecognizerUnavailableError,
+    TesseractFieldOcrBackend,
+)
 
 
 @dataclass(frozen=True)
@@ -66,7 +82,7 @@ class PdfTextExtractor:
 
     def extract(self, file_path: str, mime_type: str) -> ExtractionResult:
         if mime_type != "application/pdf" and Path(file_path).suffix.lower() != ".pdf":
-            return ExtractionResult(method="native_pdf", warnings=["El archivo no es un PDF."])
+            return ExtractionResult(method="pdf_text", warnings=["El archivo no es un PDF."])
         try:
             import pdfplumber
 
@@ -92,7 +108,7 @@ class PdfTextExtractor:
                             )
                         )
         except Exception as exc:  # Un PDF malformado no debe impedir guardar el original.
-            return ExtractionResult(method="native_pdf", warnings=[f"No fue posible leer el PDF: {exc}"])
+            return ExtractionResult(method="pdf_text", warnings=[f"No fue posible leer el PDF: {exc}"])
 
         text = "\n".join(page.text for page in pages)
         usable_characters = sum(character.isalnum() for character in text)
@@ -130,7 +146,7 @@ class PdfTextExtractor:
         }
         if not useful:
             return ExtractionResult(
-                method="native_pdf",
+                method="pdf_text",
                 pages=pages,
                 words=words,
                 warnings=[
@@ -139,7 +155,7 @@ class PdfTextExtractor:
                 metadata=metadata,
             )
         return ExtractionResult(
-            method="native_pdf",
+            method="pdf_text",
             pages=pages,
             words=words,
             has_usable_text=True,
@@ -157,9 +173,19 @@ class OcrExtractor:
         *,
         language: str = OCR_LANG,
         tesseract_cmd: str | None = TESSERACT_CMD,
+        debug_enabled: bool = OCR_DEBUG,
+        debug_directory: str | Path = OCR_DEBUG_DIR,
+        debug_run_id: str | None = None,
+        handwriting_model_path: str | Path | None = HANDWRITING_MODEL_PATH,
+        handwriting_python: str | Path | None = HANDWRITING_PYTHON,
     ) -> None:
         self.language = language
         self.tesseract_cmd = tesseract_cmd
+        self.debug_enabled = debug_enabled
+        self.debug_directory = Path(debug_directory)
+        self.debug_run_id = debug_run_id
+        self.handwriting_model_path = handwriting_model_path
+        self.handwriting_python = handwriting_python
 
     def _load_engine(self):
         executable = shutil.which(self.tesseract_cmd or "tesseract")
@@ -222,6 +248,69 @@ class OcrExtractor:
                 configuration=self.tesseract_config,
             )
         pytesseract = self._load_engine()
+        if is_image:
+            handwriting_recognizer = OptionalTrOcrFieldRecognizer(
+                self.handwriting_model_path,
+                python_executable=self.handwriting_python,
+            )
+            try:
+                recognition = RecognitionPipeline(
+                    LocalMaintenanceImageRecognizer(
+                        TesseractFieldOcrBackend(pytesseract, language=self.language),
+                        handwriting_recognizer=handwriting_recognizer,
+                        debug_enabled=self.debug_enabled,
+                        debug_directory=self.debug_directory,
+                        debug_run_id=self.debug_run_id,
+                    ),
+                    optional_fallback=None,
+                ).analyze(file_path)
+            except RecognizerUnavailableError as exc:
+                raise OcrUnavailableError(str(exc)) from exc
+            except ImageValidationError as exc:
+                raise OcrProcessingError(str(exc)) from exc
+            except pytesseract.TesseractError as exc:
+                message = str(exc)
+                if "Failed loading language" in message or "Error opening data file" in message:
+                    raise OcrUnavailableError(
+                        f"Tesseract no pudo cargar los idiomas {self.language}. Instala sus datos de idioma."
+                    ) from exc
+                raise OcrProcessingError("Tesseract no pudo procesar la imagen especializada.") from exc
+            finally:
+                handwriting_recognizer.close()
+
+            lines: list[str] = []
+            warnings: list[str] = []
+            for event in recognition.events:
+                date_text = event.service_date.raw_value or "fecha no detectada"
+                mileage_text = event.mileage.raw_value or "kilometraje no detectado"
+                lines.append(
+                    f"MANTENIMIENTO\nFecha: {date_text}\nKilometraje: {mileage_text} km"
+                )
+                warnings.extend(event.warnings)
+            if not recognition.events:
+                warnings.append(
+                    "No se encontraron cuadros con fecha y kilometraje; se requiere captura manual."
+                )
+            elif any(event.requires_human_review for event in recognition.events):
+                warnings.append("Uno o más mantenimientos requieren revisión humana.")
+            return ExtractionResult(
+                method="local_maintenance_image",
+                pages=[ExtractedPage(1, "\n\n".join(lines))] if lines else [],
+                has_usable_text=bool(recognition.events),
+                warnings=list(dict.fromkeys(warnings)),
+                language=self.language,
+                configuration="specialized-fields:date+mileage",
+                metadata={
+                    "provider": recognition.provider,
+                    "pipeline": "maintenance_image_v1",
+                    "event_count": len(recognition.events),
+                    "maintenance_image_events": recognition.metadata_events(),
+                    "diagnostics": recognition.diagnostics,
+                    "external_fallback_used": recognition.external_fallback_used,
+                    "external_fallback_configured": False,
+                    "debug_directory": recognition.debug_directory,
+                },
+            )
         try:
             with TemporaryDirectory(prefix="maintenance-ocr-") as temporary_directory:
                 sources: list[Path] = []
@@ -304,11 +393,16 @@ class OcrExtractor:
 class VisionExtractor:
     """Punto de extensión visual; hoy delega en el proveedor OCR configurado."""
 
-    def __init__(self, ocr_extractor: DocumentExtractor | None = None) -> None:
+    def __init__(
+        self,
+        ocr_extractor: DocumentExtractor | None = None,
+        *,
+        debug_run_id: str | None = None,
+    ) -> None:
         if ocr_extractor is not None:
             self.ocr_extractor = ocr_extractor
         elif OCR_PROVIDER == "tesseract":
-            self.ocr_extractor = OcrExtractor()
+            self.ocr_extractor = OcrExtractor(debug_run_id=debug_run_id)
         else:
             self.ocr_extractor = None
 
@@ -335,9 +429,11 @@ class HybridExtractor:
         pdf_text_extractor: DocumentExtractor | None = None,
         vision_extractor: DocumentExtractor | None = None,
         manual_extractor: DocumentExtractor | None = None,
+        *,
+        debug_run_id: str | None = None,
     ) -> None:
         self.pdf_text_extractor = pdf_text_extractor or PdfTextExtractor()
-        self.vision_extractor = vision_extractor or VisionExtractor()
+        self.vision_extractor = vision_extractor or VisionExtractor(debug_run_id=debug_run_id)
         self.manual_extractor = manual_extractor or ManualExtractor()
 
     def extract(self, file_path: str, mime_type: str) -> ExtractionResult:

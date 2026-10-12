@@ -13,6 +13,7 @@ from app.schemas.service_event_schema import ServiceEventRead
 from app.services.document_parser import ParsedDocument, parse_document
 from app.services.document_service import get_document_or_raise
 from app.services.extraction_service import DocumentExtractor, HybridExtractor
+from app.services.service_event_service import apply_vehicle_consistency_review
 
 
 class DocumentAnalysisReprocessConflict(Exception):
@@ -60,6 +61,7 @@ def _create_event(
         "works": parsed_event.work_evidence,
         "combined_confidence": round(parsed_event.confidence_score, 4),
         "manually_verified": False,
+        "base_requires_human_review": parsed_event.requires_human_review,
     }
     return ServiceEvent(
         document_id=document_id,
@@ -112,6 +114,9 @@ def analyze_document(
     *,
     force: bool = False,
     extractor: DocumentExtractor | None = None,
+    persist: bool = True,
+    detect_duplicates: bool = True,
+    review_vehicle_history: bool = True,
 ) -> DocumentAnalysisRead:
     """Extrae el archivo original; `force` sólo reemplaza resultados automáticos no confirmados."""
     document = get_document_or_raise(db, document_id)
@@ -124,7 +129,10 @@ def analyze_document(
             return _analysis_read(existing, events)
         _discard_automatic_analysis(db, document.id, existing)
 
-    extraction = (extractor or HybridExtractor()).extract(document.file_path, document.mime_type)
+    extraction = (extractor or HybridExtractor(debug_run_id=str(document.id))).extract(
+        document.file_path,
+        document.mime_type,
+    )
     parsed: ParsedDocument = parse_document(extraction)
     document_fields = {
         name: _field_payload(value, extraction.method, document.id)
@@ -135,7 +143,7 @@ def analyze_document(
     )
     if extraction.metadata:
         document_fields["extraction_metadata"] = extraction.metadata
-        if extraction.method == "ocr":
+        if extraction.method in {"ocr", "tesseract"}:
             document_fields["ocr"] = extraction.metadata
     if parsed.layout_debug:
         document_fields["layout_debug"] = parsed.layout_debug
@@ -164,7 +172,7 @@ def analyze_document(
             parsed_event=parsed_event,
             document_fields=document_fields,
         )
-        duplicate = _find_duplicate_event(db, event)
+        duplicate = _find_duplicate_event(db, event) if detect_duplicates else None
         if duplicate:
             analysis.warnings = [
                 *analysis.warnings,
@@ -176,7 +184,12 @@ def analyze_document(
         db.flush()
         persisted_events.append(event)
 
-    db.commit()
+    if review_vehicle_history:
+        apply_vehicle_consistency_review(db, document.vehicle_id)
+    if persist:
+        db.commit()
+    else:
+        db.flush()
     db.refresh(analysis)
     for event in persisted_events:
         db.refresh(event)

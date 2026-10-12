@@ -11,6 +11,7 @@ class MaintenanceCreate(BaseModel):
     odometer: int = Field(ge=0)
     maintenance_type: str = Field(min_length=1, max_length=120)
     description: Optional[str] = Field(default=None, max_length=3000)
+    resets_maintenance_interval: bool = True
 
     @field_validator("maintenance_date")
     @classmethod
@@ -26,4 +27,3 @@ class MaintenanceRead(MaintenanceCreate):
     id: int
     vehicle_id: int
     created_at: datetime
-

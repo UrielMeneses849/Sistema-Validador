@@ -52,7 +52,13 @@ def _validate_document(filename: str, content_type: str | None, content: bytes) 
 
 
 def save_document(
-    db: Session, *, vehicle_id: int, filename: str, content_type: str | None, content: bytes
+    db: Session,
+    *,
+    vehicle_id: int,
+    filename: str,
+    content_type: str | None,
+    content: bytes,
+    persist: bool = True,
 ) -> Document:
     get_vehicle_or_raise(db, vehicle_id)
     original_filename = Path(filename or "").name
@@ -73,7 +79,10 @@ def save_document(
         file_size=len(content),
     )
     db.add(document)
-    db.commit()
+    if persist:
+        db.commit()
+    else:
+        db.flush()
     db.refresh(document)
     return document
 

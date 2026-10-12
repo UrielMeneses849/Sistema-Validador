@@ -4,33 +4,26 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Vehículos · InteliDrive</title>
-  <link rel="stylesheet" href="/css/styles.css">
+  <link rel="stylesheet" href="/css/styles.css?v=intelidrive-dark-3"><link rel="stylesheet" href="/css/intelidrive-dark.css?v=intelidrive-dark-3">
 </head>
-<body>
+<body><a class="skip-link" href="#main-content">Ir al contenido</a>
   <div class="app-shell">
     <aside class="sidebar">
-      <a class="brand" href="/"><span class="brand-mark">ID</span><span><strong>InteliDrive</strong><small>Vehicle Intelligence</small></span></a>
-      <p class="nav-label">OPERACIÓN</p>
-      <nav>
-        <ul class="nav-list">
-          <li><a href="/"><span class="nav-icon">⌕</span>Auditoría historial</a></li>
-          <li><a href="/dashboard.html"><span class="nav-icon">▦</span>Dashboard</a></li>
-          <li><a class="active" href="/vehicles.html"><span class="nav-icon">▤</span>Vehículos</a></li>
-          <li><a href="/register_maintenance.html"><span class="nav-icon">◷</span>Últimos mantenimientos</a></li>
-          <li><a href="/validate_document.html"><span class="nav-icon">⌁</span>Validar documento</a></li>
-          <li><a href="/history.html"><span class="nav-icon">☷</span>Historial</a></li>
-        </ul>
-      </nav>
-      <div class="side-footer"><span>Powered by</span><strong>NEXVORA</strong></div>
+      <a class="brand" href="/?v=intelidrive-dark-3" aria-label="InteliDrive, inicio"><svg class="brand-logo" viewBox="0 0 48 42" aria-hidden="true"><path d="M5 5h22c24 0 23 30-1 30h-7l3-10h6c10 0 11-10 0-10H3z"/><path d="M5 21h10l-4 16H1z"/></svg><span><strong>InteliDrive</strong><small>Vehicle Intelligence</small></span></a>
+      <p class="nav-label">VALIDAR MANTENIMIENTOS</p>
+      <nav aria-label="Navegación principal"><ul class="nav-list"><li><a href="/validate_document.html?v=intelidrive-dark-3"><svg class="ui-icon nav-icon" aria-hidden="true"><use href="/css/assets/icons.svg?v=intelidrive-dark-3#pdf"></use></svg><span>Validador de mantenimientos PDF</span></a></li><li><a href="/validate_images.html?v=intelidrive-dark-3"><svg class="ui-icon nav-icon" aria-hidden="true"><use href="/css/assets/icons.svg?v=intelidrive-dark-3#image"></use></svg><span>Validador de mantenimientos imágenes</span></a></li><li><a class="active" aria-current="page" href="/vehicles.html?v=intelidrive-dark-3"><svg class="ui-icon nav-icon" aria-hidden="true"><use href="/css/assets/icons.svg?v=intelidrive-dark-3#vehicle"></use></svg><span>Vehículos</span></a></li><li><a href="/manufacturer_rules.html?v=intelidrive-dark-3"><svg class="ui-icon nav-icon" aria-hidden="true"><use href="/css/assets/icons.svg?v=intelidrive-dark-3#rules"></use></svg><span>Reglas de fabricante</span></a></li><li><a href="/history.html?v=intelidrive-dark-3"><svg class="ui-icon nav-icon" aria-hidden="true"><use href="/css/assets/icons.svg?v=intelidrive-dark-3#history"></use></svg><span>Historial</span></a></li></ul></nav>
+      <a class="sidebar-guide" href="/vehicles.html?v=intelidrive-dark-3"><svg class="ui-icon " aria-hidden="true"><use href="/css/assets/icons.svg?v=intelidrive-dark-3#sparkle"></use></svg><span><strong>¿Por dónde empiezo?</strong><small>Registra tu vehículo y después valida sus comprobantes.</small></span><svg class="ui-icon " aria-hidden="true"><use href="/css/assets/icons.svg?v=intelidrive-dark-3#arrow"></use></svg></a>
+      <div class="side-footer"><span>Powered by</span><strong>NEXVORA</strong><i></i><small>DRIVEN BY DATA<br>BUILT FOR WHAT’S NEXT</small></div>
     </aside>
 
-    <main class="page">
+    <main class="page" id="main-content"><div class="topbar"><div><strong>Panel de mantenimiento</strong><small>Vehículos</small></div><span class="system-status"><i></i>Inteligencia en cada kilómetro</span></div>
       <header class="page-header">
         <div>
           <p class="eyebrow">Catálogo operativo</p>
           <h1>Vehículos</h1>
-          <p class="subtitle">Registra, consulta y mantiene actualizada la información de la flota.</p>
+          <p class="subtitle">Registra tus vehículos para comenzar a validar sus comprobantes de mantenimiento.</p>
         </div>
+        <a class="button button-secondary" href="/manufacturer_rules.html?v=intelidrive-dark-3">Reglas de fabricante</a>
       </header>
 
       <div class="split">
@@ -45,6 +38,22 @@
           <div id="vehicle-notice" class="notice" role="status" aria-live="polite"></div>
 
           <form id="vehicle-form" novalidate>
+            <section class="vehicle-form-section contract-upload-section" aria-labelledby="contract-upload-title">
+              <div class="vehicle-form-section-heading">
+                <div>
+                  <h3 id="contract-upload-title">Cargar contrato PDF</h3>
+                  <p>Extrae contrato, fechas, vehículo, condición y kilometraje inicial.</p>
+                </div>
+              </div>
+              <label class="upload-zone contract-upload-zone" for="contract-pdf">
+                <span class="upload-icon" aria-hidden="true">⇧</span>
+                <strong id="contract-upload-label">Seleccionar contrato PDF</strong>
+                <small>Carga el contrato para completar los datos automáticamente. Revisa la lectura antes de guardar; después de leerlo sólo tendrás que capturar el kilometraje actual. El PDF no se guarda.</small>
+                <input id="contract-pdf" name="contract_pdf" type="file" accept="application/pdf,.pdf">
+              </label>
+              <div id="contract-upload-status" class="contract-upload-status" role="status" aria-live="polite"></div>
+            </section>
+
             <section class="vehicle-form-section" aria-labelledby="vehicle-data-title">
               <div class="vehicle-form-section-heading">
                 <div>
@@ -54,17 +63,37 @@
               </div>
 
               <div class="form-grid">
-                <div class="field">
+                <div class="field full">
+                  <label for="vehicle_condition">Condición del vehículo <span class="required">*</span></label>
+                  <select id="vehicle_condition" name="vehicle_condition" required>
+                    <option value="">Selecciona una condición</option>
+                    <option value="new">Nuevo (M1)</option>
+                    <option value="used">Seminuevo (M2)</option>
+                  </select>
+                </div>
+                <div class="field" id="brand-text-field">
                   <label for="brand">Marca <span class="required">*</span></label>
                   <input id="brand" name="brand" required maxlength="80" placeholder="Ford">
+                </div>
+                <div class="field hidden" id="brand-policy-field">
+                  <label for="brand_policy">Marca con política activa <span class="required">*</span></label>
+                  <select id="brand_policy" name="brand_policy" disabled>
+                    <option value="">Cargando políticas…</option>
+                  </select>
+                  <p class="hint">Las políticas se administran en el catálogo de marcas.</p>
                 </div>
                 <div class="field">
                   <label for="model">Modelo <span class="required">*</span></label>
                   <input id="model" name="model" required maxlength="80" placeholder="Transit">
                 </div>
                 <div class="field">
-                  <label for="kilometraje">Kilometraje <span class="required">*</span></label>
+                  <label for="kilometraje">Kilometraje actual <span class="required">*</span></label>
                   <input id="kilometraje" name="kilometraje" type="number" min="0" step="1" required inputmode="numeric" placeholder="0">
+                </div>
+                <div class="field">
+                  <label for="initial_odometer">Kilometraje al inicio del contrato <span class="required">*</span></label>
+                  <input id="initial_odometer" name="initial_odometer" type="number" min="0" step="1" required inputmode="numeric" placeholder="0">
+                  <p class="hint">Se conserva como referencia histórica y no podrá modificarse después.</p>
                 </div>
                 <div class="field">
                   <label for="fecha_factura_origen">Fecha factura de origen <span class="required">*</span></label>
@@ -77,7 +106,7 @@
               <div class="vehicle-form-section-heading">
                 <div>
                   <h3 id="contract-data-title">Datos del contrato</h3>
-                  <p>El número se asigna automáticamente al guardar el registro.</p>
+                  <p>Los datos pueden obtenerse del PDF o completarse manualmente.</p>
                 </div>
               </div>
 
@@ -85,7 +114,7 @@
                 <div class="field full">
                   <label for="numero_contrato">Número de contrato</label>
                   <input id="numero_contrato" name="numero_contrato" type="text" required readonly inputmode="numeric" pattern="[0-9]{6}" minlength="6" maxlength="6" aria-describedby="numero-contrato-hint">
-                  <p class="hint" id="numero-contrato-hint">ID automático de seis dígitos.</p>
+                  <p class="hint" id="numero-contrato-hint">Se conserva el número leído del contrato; sin PDF se asigna el consecutivo disponible.</p>
                 </div>
                 <div class="field">
                   <label for="fecha_inicio_contrato">Fecha inicio de contrato <span class="required">*</span></label>
@@ -109,7 +138,7 @@
           <div class="card-header">
             <div>
               <h2 class="card-title">Vehículos registrados</h2>
-              <p class="card-subtitle">Los registros de esta pantalla se guardan localmente en este navegador.</p>
+              <p class="card-subtitle">Busca un vehículo, actualiza sus datos o consulta sus mantenimientos.</p>
             </div>
           </div>
 
@@ -124,10 +153,10 @@
           <div class="table-wrap">
             <table class="data-table">
               <thead>
-                <tr><th>Contrato</th><th>Marca / modelo</th><th>Kilometraje</th><th>Acciones</th></tr>
+                <tr><th>Contrato</th><th>Condición</th><th>Marca / modelo</th><th>Kilometraje</th><th>Acciones</th></tr>
               </thead>
               <tbody id="vehicles-table">
-                <tr><td colspan="4" class="empty">Aún no hay vehículos registrados localmente.</td></tr>
+                <tr><td colspan="5" class="empty">Aún no hay vehículos registrados.</td></tr>
               </tbody>
             </table>
           </div>
@@ -136,6 +165,26 @@
     </main>
   </div>
 
-  <script src="/js/vehicles.js?v=contract-form-v2"></script>
+  <dialog id="vehicle-delete-dialog" class="confirmation-dialog" aria-labelledby="vehicle-delete-title" aria-describedby="vehicle-delete-description">
+    <form id="vehicle-delete-form">
+      <div class="confirmation-dialog-icon" aria-hidden="true">!</div>
+      <p class="eyebrow">Confirmar eliminación</p>
+      <h2 id="vehicle-delete-title">¿Eliminar este vehículo?</h2>
+      <p id="vehicle-delete-description">Esta acción eliminará definitivamente el vehículo, sus mantenimientos, documentos y validaciones asociados. No se puede deshacer.</p>
+      <dl class="confirmation-details">
+        <div><dt>Número de contrato</dt><dd id="delete-vehicle-contract">—</dd></div>
+        <div><dt>Marca</dt><dd id="delete-vehicle-brand">—</dd></div>
+        <div><dt>Modelo</dt><dd id="delete-vehicle-model">—</dd></div>
+      </dl>
+      <div id="vehicle-delete-error" class="notice" role="alert" aria-live="assertive"></div>
+      <div class="confirmation-actions">
+        <button class="button button-secondary" id="cancel-vehicle-delete" type="button">Cancelar</button>
+        <button class="button button-danger button-danger-solid" id="confirm-vehicle-delete" type="submit">Eliminar vehículo</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script src="/js/api.js?v=intelidrive-dark-3"></script>
+  <script src="/js/vehicles.js?v=intelidrive-dark-3"></script>
 </body>
 </html>
